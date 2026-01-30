@@ -1,0 +1,23 @@
+# --- ROS 2 Build Artifacts ---
+build/
+install/
+log/
+
+# --- Python & System ---
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+.venv/
+env/
+venv/
+
+# --- IDE & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Gazebo & Logs ---
+*.log
+/tmp/
