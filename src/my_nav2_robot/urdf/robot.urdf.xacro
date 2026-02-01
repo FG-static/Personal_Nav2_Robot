@@ -132,6 +132,16 @@
             </geometry>
             <material name="red"/>
         </visual>
+        <!--
+        <collision>
+            <geometry>
+                <cylinder radius="${laser_radius}" length="${laser_height}"/>
+            </geometry>
+        </collision>
+        -->
+        <xacro:inertial_cylinder mass="0.1" r="${laser_radius}" h="${laser_height}">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
     </link>
 
     <joint name="laser_joint" type="fixed">
@@ -139,4 +149,57 @@
         <child link="laser_link"/>
         <origin xyz="0 0 ${chassis_height + laser_height / 2}" rpy="0 0 0"/>
     </joint>
+
+    <gazebo reference="laser_link">
+        <sensor name="gpu_lidar" type="gpu_lidar">
+            <topic>scan</topic>
+            <pose>0 0 0 0 0 0</pose>
+            <frame_id>laser_link</frame_id>
+            <gz_frame_id>laser_link</gz_frame_id>
+            <visualize>true</visualize> <update_rate>10</update_rate>
+            <lidar>
+                <scan>
+                    <horizontal>
+                        <samples>360</samples>
+                        <resolution>1</resolution>
+                        <min_angle>-3.14159</min_angle>
+                        <max_angle>3.14159</max_angle>
+                    </horizontal>
+                </scan>
+                <range>
+                    <min>0.12</min>
+                    <max>12.0</max>
+                    <resolution>0.01</resolution>
+                </range>
+            </lidar>
+            <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+                <render_engine>ogre2</render_engine>
+            </plugin>
+        </sensor>
+    </gazebo>
+
+    <gazebo>
+        <plugin
+            filename="gz-sim-diff-drive-system"
+            name="gz::sim::systems::DiffDrive">
+            <left_joint>front_left_wheel_joint</left_joint> 
+            <right_joint>front_right_wheel_joint</right_joint>
+
+            <wheel_separation>${chassis_width + wheel_width}</wheel_separation>
+            <wheel_radius>${wheel_radius}</wheel_radius>
+
+            <topic>cmd_vel</topic>
+            <odom_topic>odom</odom_topic>
+            <frame_id>odom</frame_id>
+            <child_frame_id>base_footprint</child_frame_id>
+            <publish_odom_tf>true</publish_odom_tf>
+            <use_gz_time>true</use_gz_time>
+        </plugin>
+
+        <plugin
+            filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+            <topic>joint_states</topic>
+        </plugin>
+    </gazebo>
 </robot>
