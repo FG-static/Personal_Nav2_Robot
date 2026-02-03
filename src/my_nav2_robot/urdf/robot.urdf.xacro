@@ -212,7 +212,7 @@
             <tf_topic>/tf</tf_topic> <!--重要-->
             <frame_id>odom</frame_id>
             <child_frame_id>base_footprint</child_frame_id>
-            <publish_odom_tf>true</publish_odom_tf>
+            <publish_odom_tf>false</publish_odom_tf>
             <use_gz_time>true</use_gz_time>
         </plugin>
 

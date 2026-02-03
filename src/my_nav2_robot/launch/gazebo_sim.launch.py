@@ -39,7 +39,7 @@ def generate_launch_description():
     bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        arguments=['/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
+        arguments=['/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist', # 最好是这样
                    '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
                    '/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
                    '/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image',
