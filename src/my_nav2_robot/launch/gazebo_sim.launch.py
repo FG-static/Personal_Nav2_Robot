@@ -1,17 +1,18 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import Command
+from launch.substitutions import Command, LaunchConfiguration
 
 def generate_launch_description():
     pkg_name = 'my_nav2_robot'
     pkg_share = get_package_share_directory(pkg_name)
+    nav2_params = LaunchConfiguration('nav2_params')
 
     xacro_file = os.path.join(pkg_share, 'urdf', 'robot.urdf.xacro')
-    params_file = os.path.join(pkg_share, 'config', 'nav2_params.yaml')
+    #params_file = os.path.join(pkg_share, 'config', nav2_params)
     robot_description = Command(['xacro ', xacro_file])
 
     node_robot_state_publisher = Node(
@@ -26,7 +27,7 @@ def generate_launch_description():
             get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')]),
         launch_arguments={
             'gz_args': '-r sensors.sdf',
-            'params_file': params_file,
+            'params_file': nav2_params,
             }.items(),
     )
 

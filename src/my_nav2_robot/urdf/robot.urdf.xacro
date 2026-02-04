@@ -197,6 +197,15 @@
         </sensor>
     </gazebo>
 
+    <gazebo reference="rear_left_wheel_link">
+        <mu1>0.01</mu1> 
+        <mu2>0.01</mu2>
+    </gazebo>
+    <gazebo reference="rear_right_wheel_link">
+        <mu1>0.01</mu1>
+        <mu2>0.01</mu2>
+    </gazebo>
+
     <gazebo>
         <plugin
             filename="gz-sim-diff-drive-system"
@@ -206,6 +215,7 @@
 
             <wheel_separation>${chassis_width + wheel_width}</wheel_separation>
             <wheel_radius>${wheel_radius}</wheel_radius>
+            <max_wheel_torque>200</max_wheel_torque>
 
             <topic>cmd_vel</topic>
             <odom_topic>odom</odom_topic>
