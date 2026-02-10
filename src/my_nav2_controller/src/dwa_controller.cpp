@@ -111,6 +111,7 @@ namespace my_nav2_controller {
                 }
 
                 if (collided) continue;
+                // 评分
                 double score = v * 1.0 - std::abs(w) * 0.1; // 暂时先这样
                 if (score > best_path.score) best_path = {v, w, score, 0.0, 0.0};
             }
