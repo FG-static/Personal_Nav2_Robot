@@ -127,6 +127,12 @@ namespace my_nav2_controller {
     void MyDWAController::activate() { RCLCPP_INFO(logger_, "插件已激活"); }
     void MyDWAController::deactivate() { RCLCPP_INFO(logger_, "插件已停用"); }
     void MyDWAController::cleanup() { RCLCPP_INFO(logger_, "插件已清理"); }
+    void MyDWAController::setSpeedLimit(const double & speed_limit, const bool & percentage) {
+        
+        (void)speed_limit;
+        (void)percentage;
+        RCLCPP_INFO(logger_, "收到限速指令，当前插件尚未实现具体的限速逻辑");
+    }
 } // my_nav2_controller
 
 // 注册算法插件

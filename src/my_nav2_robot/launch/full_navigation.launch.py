@@ -18,7 +18,7 @@ def generate_launch_description():
     slam_mode = LaunchConfiguration('slam', default='False')
 
     nav2_params_slam = os.path.join(pkg_project_bringup, 'config', 'nav2_params_slam.yaml')
-    nav2_params_nav = os.path.join(pkg_project_bringup, 'config', 'nav2_params_nav.yaml')
+    nav2_params_nav = os.path.join(pkg_project_bringup, 'config', 'nav2_params_nav_diy.yaml')
 
     # 部分变量定义
     use_sim_time = LaunchConfiguration('use_sim_time', default = 'true')

@@ -45,6 +45,8 @@ namespace my_nav2_controller {
          */
         void setPlan(const nav_msgs::msg::Path &path) override;
 
+        void setSpeedLimit(const double &speed_limit, const bool &percentage) override;
+
         /**
          * @brief 计算下达给底盘的速度（但不是直接下达给底盘）
          * @param pose 带时间戳的小车位姿
