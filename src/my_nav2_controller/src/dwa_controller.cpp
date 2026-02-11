@@ -28,6 +28,18 @@ namespace my_nav2_controller {
         clock_ = node->get_clock();
         
         declare_parameter_if_not_declared(
+            node, plugin_name_ + ".alpha", rclcpp::ParameterValue(2.0)
+        );
+        declare_parameter_if_not_declared(
+            node, plugin_name_ + ".beta", rclcpp::ParameterValue(1.5)
+        );
+        declare_parameter_if_not_declared(
+            node, plugin_name_ + ".gamma", rclcpp::ParameterValue(1.0)
+        );
+        declare_parameter_if_not_declared(
+            node, plugin_name_ + ".lookahead_dist", rclcpp::ParameterValue(0.8)
+        );
+        declare_parameter_if_not_declared(
             node, plugin_name_ + ".max_v", rclcpp::ParameterValue(0.5)
         );
         declare_parameter_if_not_declared(
@@ -47,6 +59,10 @@ namespace my_nav2_controller {
         );
 
         // 获取参数
+        node->get_parameter(plugin_name_ + ".alpha", alpha);
+        node->get_parameter(plugin_name_ + ".beta", beta);
+        node->get_parameter(plugin_name_ + ".gamma", gamma);
+        node->get_parameter(plugin_name_ + ".lookahead_dist", lookahead_dist);
         node->get_parameter(plugin_name_ + ".max_v", max_v);
         node->get_parameter(plugin_name_ + ".max_w", max_w);
         node->get_parameter(plugin_name_ + ".lim_a", lim_a);
@@ -65,6 +81,20 @@ namespace my_nav2_controller {
         global_plan_ = path;
     }
 
+    /**
+     * @brief 以逆时针为正方向计算初始角到目标角的差角
+     * @param inialp 初始角
+     * @param goalalp 目标角
+     * @return 一个double值
+     */
+    double MyDWAController::cal_diff_angle(double inialp, double goalalp) {
+
+        double raw_diff_angle = goalalp - inialp;
+        while (raw_diff_angle > M_PI) raw_diff_angle -= 2 * M_PI;
+        while (raw_diff_angle < -M_PI) raw_diff_angle += 2 * M_PI;
+        return raw_diff_angle;
+    }
+
     geometry_msgs::msg::TwistStamped MyDWAController::computeVelocityCommands(
         const geometry_msgs::msg::PoseStamped & pose,
         const geometry_msgs::msg::Twist & velocity,
@@ -72,6 +102,35 @@ namespace my_nav2_controller {
 
         auto node = node_.lock();
         auto costmap = costmap_ros_->getCostmap();
+
+        // 设定诱饵点
+        geometry_msgs::msg::PoseStamped target_pose;
+        bool found_target = false;
+
+        // 获取机器人位置
+        double r_x = pose.pose.position.x,
+            r_y = pose.pose.position.y,
+            r_yaw = tf2::getYaw(pose.pose.orientation);
+
+        // 遍历路径
+        for (const auto &p : global_plan_.poses) {
+
+            double dx = p.pose.position.x - r_x,
+                dy = p.pose.position.y - r_y;
+            if (std::hypot(dx, dy) >= lookahead_dist) {
+
+                target_pose = p;
+                found_target = true;
+                break;
+            }
+        }
+        if (!found_target && !global_plan_.poses.empty()) {
+
+            target_pose = global_plan_.poses.back();
+        }
+        // 计算到诱饵点的角度
+        double target_yaw = std::atan2(target_pose.pose.position.y - r_y,
+                                 target_pose.pose.position.x - r_x);
 
         // 动态窗口
         double dt = 0.1,
@@ -87,7 +146,7 @@ namespace my_nav2_controller {
 
             for (double w = w_min; w <= w_max; w += 0.1) {
 
-                double x = 0.0, y = 0.0, alp = 0.0;
+                double x = 0.0, y = 0.0, alp = r_yaw;
                 bool collided = false;
                 double min_dist_to_path = 1e9;
 
@@ -98,21 +157,38 @@ namespace my_nav2_controller {
                     alp += w * 0.2;
                     unsigned int mx, my;
                     // 地图内判断
-                    if (costmap_ros_->getCostmap()->worldToMap(x + pose.pose.position.x, y + pose.pose.position.y, mx, my)) {
+                    if (costmap_ros_->getCostmap()->worldToMap(x + r_x, y + r_y, mx, my)) {
 
                         // 获取代价
                         unsigned char cost = costmap->getCost(mx, my);
-                        if (cost >= nav2_costmap_2d::LETHAL_OBSTACLE) { // 撞墙了
+                        if (cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) { // 撞墙了
 
                             collided = true;
                             break;
+                        }
+                        double dist_score_temp = (255.0 - cost) / 255.0; // 归一化
+                        if (dist_score_temp < min_dist_to_path) {
+
+                            // 代价越小，距离越大
+                            min_dist_to_path = dist_score_temp;
                         }
                     }
                 }
 
                 if (collided) continue;
                 // 评分
-                double score = v * 1.0 - std::abs(w) * 0.1; // 暂时先这样
+                // Heading
+                double diff_angle = std::abs(cal_diff_angle(alp, target_yaw)),
+                    heading_score = (M_PI - diff_angle) / M_PI;
+                
+                // Distance
+                double distance_score = min_dist_to_path;
+
+                // Velocity
+                double velocity_score = v / max_v;
+                double score = alpha * heading_score +
+                               beta * distance_score +
+                               gamma * velocity_score;
                 if (score > best_path.score) best_path = {v, w, score, 0.0, 0.0};
             }
         }

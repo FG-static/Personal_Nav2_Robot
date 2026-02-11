@@ -117,6 +117,10 @@ controller_server:
       yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: "my_nav2_controller/MyDWAController"
+      alpha: 2.0
+      beta: 1.5
+      gamma: 1.0
+      lookahead_dist: 0.8
       max_v: 0.5
       max_w: 1.0
       lim_a: 2.5

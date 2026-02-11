@@ -61,6 +61,7 @@ namespace my_nav2_controller {
     protected:
         
         double cal_score(double v, double w);
+        double cal_diff_angle(double inialp, double goalalp);
 
         rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
         std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
@@ -71,6 +72,8 @@ namespace my_nav2_controller {
         std::string plugin_name_;
 
         // DWA参数
+        double alpha, beta, gamma; // heading distance velocity分权重
+        double lookahead_dist; // 诱饵点
         double max_v; // 最大速度
         double max_w;
         double lim_a; // 加速度限制
