@@ -13,8 +13,12 @@ find_package(nav_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(Sophus REQUIRED)
+find_package(tf2_eigen REQUIRED)
 
 add_executable(robot_driver src/robot_driver.cpp)
+add_executable(odom_evaluator src/odom_evaluator.cpp)
 ament_target_dependencies(robot_driver 
     rclcpp 
     geometry_msgs 
@@ -22,9 +26,19 @@ ament_target_dependencies(robot_driver
     tf2 
     tf2_ros
 )
+ament_target_dependencies(odom_evaluator
+    rclcpp 
+    geometry_msgs 
+    nav_msgs 
+    tf2 
+    tf2_ros
+    tf2_eigen
+    Sophus
+)
 # 安装
 install(TARGETS
   robot_driver
+  odom_evaluator
   DESTINATION lib/${PROJECT_NAME}
 )
 

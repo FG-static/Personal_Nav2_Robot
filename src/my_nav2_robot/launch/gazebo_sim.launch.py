@@ -48,6 +48,7 @@ def generate_launch_description():
                    '/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V',
                    '/joint_states@sensor_msgs/msg/JointState@gz.msgs.Model',
                    '/scan/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked',
+                   '/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry', # 这个可能也要单向
                    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'], # 这个确实要单向
         parameters=[{'use_sim_time': True}],
         output='screen'

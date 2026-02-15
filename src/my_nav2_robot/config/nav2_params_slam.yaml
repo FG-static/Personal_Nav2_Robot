@@ -120,14 +120,14 @@ controller_server:
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0
-      az_max: 3.5
+      az_max: 2.0
       vx_std: 0.2
       vy_std: 0.2
-      wz_std: 0.4
+      wz_std: 0.2
       vx_max: 0.5
       vx_min: -0.35
       vy_max: 0.5
-      wz_max: 1.9
+      wz_max: 1.5
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.1
@@ -213,7 +213,7 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[ [0.2, 0.17], [0.2, -0.17], [-0.2, -0.17], [-0.2, 0.17] ]"
+      footprint: "[ [0.2, 0.261], [0.2, -0.261], [-0.2, -0.261], [-0.2, 0.261] ]"
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -259,7 +259,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
-      robot_radius: 0.25
+      robot_radius: 0.33
       resolution: 0.05
       track_unknown_space: true
       plugins: ["obstacle_layer", "inflation_layer"]

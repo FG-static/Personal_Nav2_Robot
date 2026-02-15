@@ -231,7 +231,7 @@
             <left_joint>rear_left_wheel_joint</left_joint> 
             <right_joint>rear_right_wheel_joint</right_joint>
 
-            <wheel_separation>${chassis_width + wheel_width}</wheel_separation>
+            <wheel_separation>0.522</wheel_separation>
             <wheel_radius>${wheel_radius}</wheel_radius>
             <max_wheel_torque>20</max_wheel_torque>
             <max_wheel_acceleration>3.5</max_wheel_acceleration>
@@ -252,6 +252,16 @@
             filename="gz-sim-joint-state-publisher-system"
             name="gz::sim::systems::JointStatePublisher">
             <topic>joint_states</topic>
+        </plugin>
+    </gazebo>
+    <gazebo>
+        <plugin
+            filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+            <odom_topic>ground_truth</odom_topic> <odom_frame>world</odom_frame>
+            <robot_base_frame>base_footprint</robot_base_frame>
+            <tf_topic>ground_truth/tf</tf_topic>
+            <dimensions>3</dimensions>
         </plugin>
     </gazebo>
 </robot>
