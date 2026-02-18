@@ -1,0 +1,9 @@
+<library path="my_nav2_planner_lib">
+    <class name="my_nav2_planner/MyAStarPlanner" 
+            type="my_nav2_planner::MyAStarPlanner" 
+            base_class_type="nav2_core::GlobalPlanner">
+        <description>
+            简单的A*规划器
+        </description>
+    </class>
+</library>

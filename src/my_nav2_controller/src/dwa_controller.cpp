@@ -43,7 +43,7 @@ namespace my_nav2_controller {
             node, plugin_name_ + ".max_v", rclcpp::ParameterValue(0.5)
         );
         declare_parameter_if_not_declared(
-            node, plugin_name_ + ".max_w", rclcpp::ParameterValue(1.0)
+            node, plugin_name_ + ".max_w", rclcpp::ParameterValue(1.5)
         );
         declare_parameter_if_not_declared(
             node, plugin_name_ + ".lim_a", rclcpp::ParameterValue(2.5)
@@ -161,7 +161,7 @@ namespace my_nav2_controller {
 
                         // 获取代价
                         unsigned char cost = costmap->getCost(mx, my);
-                        if (cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) { // 撞墙了
+                        if (cost >= 250) { // 撞墙了
 
                             collided = true;
                             break;
