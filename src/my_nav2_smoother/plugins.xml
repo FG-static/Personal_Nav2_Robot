@@ -1,0 +1,9 @@
+<library path="my_nav2_smoother_lib">
+    <class name="my_nav2_smoother/MyGradientSmoother" 
+            type="my_nav2_smoother::MyGradientSmoother" 
+            base_class_type="nav2_core::Smoother">
+        <description>
+            简单的梯度下降路径平滑器
+        </description>
+    </class>
+</library>

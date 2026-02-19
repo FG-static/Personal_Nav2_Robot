@@ -10,7 +10,7 @@ namespace my_nav2_planner {
 
     void MyAStarPlanner::configure(
         const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent,
-        std::string name, std::shared_ptr<tf2_ros::Buffer> tf,
+        std::string name, std::shared_ptr<tf2_ros::Buffer> /*tf*/,
         std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) {
 
         node_ = parent.lock();
@@ -35,7 +35,7 @@ namespace my_nav2_planner {
     nav_msgs::msg::Path MyAStarPlanner::createPlan(
         const geometry_msgs::msg::PoseStamped &start,
         const geometry_msgs::msg::PoseStamped &goal,
-        std::function<bool()> cancel_checker) {
+        std::function<bool()> /*cancel_checker*/) {
 
         nav_msgs::msg::Path global_path;
         global_path.header.frame_id = global_frame_;

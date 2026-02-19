@@ -8,9 +8,14 @@
         <RateController hz="20.0">
           <RecoveryNode name="ComputePathToPose"
                         number_of_retries="1">
-            <ComputePathToPose goal="{goal}"
-                               path="{path}"
-                               planner_id="GridBased"/>
+            <Sequence>
+              <ComputePathToPose goal="{goal}"
+                                 path="{path}"
+                                 planner_id="GridBased"/>
+              <SmoothPath smoother_id="simple_smoother"
+                          unsmoothed_path="{path}"
+                          smoothed_path="{path}"/>
+            </Sequence>
             <ClearEntireCostmap name="ClearGlobalCostmap-Context"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
           </RecoveryNode>
@@ -65,6 +70,15 @@
              editable="true">
       <input_port name="number_of_retries"/>
     </Control>
+    <Action ID="SmoothPath"
+            editable="true">
+      <input_port name="smoother_id"
+                  type="std::string"/>
+      <input_port name="unsmoothed_path"
+                  type="path"/>
+      <output_port name="smoothed_path"
+                   type="path"/>
+    </Action>
     <Action ID="Wait"
             editable="true">
       <input_port name="wait_duration"/>

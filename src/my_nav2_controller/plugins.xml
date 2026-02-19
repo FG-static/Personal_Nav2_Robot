@@ -3,7 +3,7 @@
          type="my_nav2_controller::MyDWAController" 
          base_class_type="nav2_core::Controller">
     <description>
-      这是一个手动实现的简单DWA局部路径规划器插件。
+      这是一个手动实现的简单DWA局部路径规划器插件
     </description>
   </class>
 </library>
