@@ -252,9 +252,9 @@ smoother_server:
     smoother_plugins: ["simple_smoother"]
     simple_smoother:
       plugin: "my_nav2_smoother/MyGradientSmoother"
-      alpha: 0.1
-      beta: 0.5
-      max_iterations: 500
+      alpha: 0.2
+      beta: 0.35
+      max_iterations: 600
 
 behavior_server:
   ros__parameters:
