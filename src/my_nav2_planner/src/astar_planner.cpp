@@ -77,7 +77,6 @@ namespace my_nav2_planner {
             if (cur_idx == goal_idx) {
 
                 found_path = true;
-                // TODO:
                 break;
             }
 
