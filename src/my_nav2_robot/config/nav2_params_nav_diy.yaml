@@ -120,12 +120,12 @@ controller_server:
     FollowPath:
       plugin: "my_mpc_controller/MyMPCController"
       n: 10
-      q_11: 20.0
+      q_11: 30.0
       q_22: 30.0
       q_33: 1.0
-      r_11: 0.1
-      r_22: 0.075
-      f_11: 30.0
+      r_11: 0.01
+      r_22: 0.01
+      f_11: 40.0
       f_22: 40.0
       f_33: 1.5
       transform_tolerance: 0.1
