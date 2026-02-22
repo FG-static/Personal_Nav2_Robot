@@ -72,12 +72,16 @@ namespace my_mpc_controller {
         geometry_msgs::msg::TwistStamped computeVelocityCommands(
             const geometry_msgs::msg::PoseStamped &pose,
             const geometry_msgs::msg::Twist &v,
-            nav2_core::GoalChecker *goal_checker) override;
+            nav2_core::GoalChecker */*goal_checker*/) override;
     protected:
 
         // 线性化
-        void updateDiscreteModel(const double v, const double theta, 
-            Eigen::Matrix3d &A, Eigen::Matrix2d &B);
+        void updateDiscreteModel(
+            Eigen::Matrix3d &A, 
+            Eigen::Matrix<double, 3, 2> &B,
+            const double theta,
+            const double v,
+            const double dt);
 
         Eigen::VectorXd sampleReferencePath(
             const std::vector<PathPoint> &global_path,
@@ -93,9 +97,6 @@ namespace my_mpc_controller {
          */
         std::vector<PathPoint> preprocessPath(const nav_msgs::msg::Path &path);
 
-        // 代换矩阵
-        void replaceLargeMatrix(const Eigen::Matrix3d &A, const Eigen::Matrix2d &B);
-
         rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
         std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
         std::shared_ptr<tf2_ros::Buffer> tf_;
@@ -104,13 +105,26 @@ namespace my_mpc_controller {
         nav_msgs::msg::Path global_plan_;
         std::string plugin_name_;
         std::vector<PathPoint> processed_path_;
+        int last_closest_index_ = 0; // 优化路径寻找
 
         // MPC参数
         int N_ = 10; // 预测区间
         double dt_ = 0.1; // 采样时间 - 动态
         rclcpp::Duration transform_tolerance_{0, 0};
+        double // 方便传数据
+            q_11 = 20.0,
+            q_22 = 20.0,
+            q_33 = 1.0;
+        double
+            r_11 = 0.1,
+            r_22 = 0.075;
+        double
+            f_11 = 40.0,
+            f_22 = 40.0,
+            f_33 = 2.0;
         Eigen::Matrix3d Q_; // 状态权重矩阵
         Eigen::Matrix2d R_; // 控制权重矩阵
+        Eigen::Matrix3d F_; // 终端控制矩阵
     };
 }
 

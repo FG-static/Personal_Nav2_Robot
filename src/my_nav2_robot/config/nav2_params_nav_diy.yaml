@@ -86,6 +86,8 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: True
+    current_goal_checker: "general_goal_checker" #
+    current_progress_checker: "progress_checker" #
     controller_frequency: 20.0
     costmap_update_timeout: 0.30
     min_x_velocity_threshold: 0.001
@@ -116,16 +118,16 @@ controller_server:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     FollowPath:
-      plugin: "my_nav2_controller/MyDWAController"
-      alpha: 2.0
-      beta: 1.5
-      gamma: 1.0
-      lookahead_dist: 0.8
-      max_v: 0.5
-      max_w: 3.0
-      lim_a: 2.5
-      lim_aw: 3.2
-      sim_time: 1.5
+      plugin: "my_mpc_controller/MyMPCController"
+      n: 10
+      q_11: 20.0
+      q_22: 30.0
+      q_33: 1.0
+      r_11: 0.1
+      r_22: 0.075
+      f_11: 30.0
+      f_22: 40.0
+      f_33: 1.5
       transform_tolerance: 0.1
       goal_checker_plugin: "general_goal_checker"
       progress_checker_plugin: "progress_checker"

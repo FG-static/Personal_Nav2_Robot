@@ -20,6 +20,49 @@ namespace my_mpc_controller {
         logger_ = node->get_logger();
         clock_ = node->get_clock();
 
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".q_11", rclcpp::ParameterValue(20.0));
+        node->get_parameter(plugin_name_ + ".q_11", q_11);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".q_22", rclcpp::ParameterValue(20.0));
+        node->get_parameter(plugin_name_ + ".q_22", q_22);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".q_33", rclcpp::ParameterValue(1.0));
+        node->get_parameter(plugin_name_ + ".q_33", q_33);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".r_11", rclcpp::ParameterValue(0.1));
+        node->get_parameter(plugin_name_ + ".r_11", r_11);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".r_22", rclcpp::ParameterValue(0.075));
+        node->get_parameter(plugin_name_ + ".r_22", r_22);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".f_11", rclcpp::ParameterValue(40.0));
+        node->get_parameter(plugin_name_ + ".f_11", f_11);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".f_22", rclcpp::ParameterValue(40.0));
+        node->get_parameter(plugin_name_ + ".f_22", f_22);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".f_33", rclcpp::ParameterValue(2.0));
+        node->get_parameter(plugin_name_ + ".f_33", f_33);
+
+        Q_.setIdentity(); 
+        Q_(0, 0) = q_11; // x 权重
+        Q_(1, 1) = q_22; // y 权重
+        Q_(2, 2) = q_33;  // theta 权重
+
+        R_.setIdentity();
+        R_(0, 0) = r_11; // v 权重
+        R_(1, 1) = r_22; // w 权重
+
+        F_.setIdentity(); 
+        F_(0, 0) = f_11;
+        F_(1, 1) = f_22;
+        F_(2, 2) = f_33;
+
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".n", rclcpp::ParameterValue(10));
+        node->get_parameter(plugin_name_ + ".n", N_);
+
         double transform_tolerance;
         node->get_parameter(plugin_name_ + ".transform_tolerance", transform_tolerance);
         transform_tolerance_ = rclcpp::Duration::from_seconds(transform_tolerance);
@@ -30,7 +73,6 @@ namespace my_mpc_controller {
     void MyMPCController::setPlan(const nav_msgs::msg::Path &path) {
 
         global_plan_ = path;
-        // TODO：实现路径预处理
         processed_path_ = preprocessPath(global_plan_); 
     }
     
@@ -113,7 +155,7 @@ namespace my_mpc_controller {
      * @param dt 采样周期
      * @return 采样后的参考序列 x_ref [x1, y1, th1, x2, y2, th2, ...]
      */
-    Eigen::VectorXd sampleReferencePath(
+    Eigen::VectorXd MyMPCController::sampleReferencePath(
         const std::vector<PathPoint> &global_path,
         const Eigen::Vector3d &cur_pose,
         double v_ref,
@@ -121,18 +163,19 @@ namespace my_mpc_controller {
         double dt
     ) {
 
-        Eigen::VectorXd x_ref_vec(3 * N);
+        Eigen::VectorXd x_ref_vec(3 * (N + 1));
 
         // 寻点
-        int min_idx;
+        int min_idx = last_closest_index_;
         double min_dist = std::numeric_limits<double>::max();
-        for (int i = 0; i < global_path.size(); ++ i) {
+        for (int i = last_closest_index_; i < global_path.size(); ++ i) {
 
             double d = hypot(global_path[i].x - cur_pose(0), global_path[i].y - cur_pose(1));
             if (d < min_dist) {
 
                 min_dist = d;
                 min_idx = i;
+                last_closest_index_ = i;
             }
         }
 
@@ -142,7 +185,7 @@ namespace my_mpc_controller {
             total_path_len = global_path.back().s;
         
         // 采样
-        for (int i = 1; i <= N; ++ i) {
+        for (int i = 1; i <= N + 1; ++ i) {
 
             // 暂时先不考虑各段速度不同
             double s_target = s_start + i * v_ref * dt;
@@ -166,10 +209,11 @@ namespace my_mpc_controller {
     }
 
     void MyMPCController::updateDiscreteModel(
-        const double v, 
-        const double theta, 
         Eigen::Matrix3d &A, 
-        Eigen::Matrix2d &B
+        Eigen::Matrix<double, 3, 2> &B,
+        const double theta,
+        const double v,
+        const double dt
     ) {
 
         /*
@@ -183,12 +227,12 @@ namespace my_mpc_controller {
                 [\sin\theta \Delta t 0       ]
                 [0                   \Delta t]
         */
-        A << 1.0, 0.0, -v * sin(theta) * dt_,
-                0.0, 1.0,  v * sin(theta) * dt_,
-                0.0, 0.0,                   1.0;
-        B << cos(theta) * dt_, 0.0,
-                sin(theta) * dt_, 0.0,
-                0.0,              dt_;
+        A << 1.0, 0.0, -v * sin(theta) * dt,
+             0.0, 1.0,  v * cos(theta) * dt,
+             0.0, 0.0,                  1.0;
+        B << cos(theta) * dt, 0.0,
+             sin(theta) * dt, 0.0,
+             0.0,              dt;
     }
     
     /**
@@ -210,7 +254,6 @@ namespace my_mpc_controller {
         int N
     ) {
 
-        // TODO：你的大矩阵拼接术呢
         const int
             state_dim = 3,
             control_dim = 2;
@@ -240,15 +283,79 @@ namespace my_mpc_controller {
         }
 
         // 构建 Q_bar
+        Eigen::MatrixXd Q_bar = Eigen::MatrixXd::Zero((N + 1) * state_dim, (N + 1) * state_dim);
+        for (int i = 0; i <= N - 1; ++ i) {
+
+            Q_bar.block<3, 3>(i * state_dim, i * state_dim) = Q;
+        }
+        Q_bar.block<3, 3>(N * state_dim, N * state_dim) = F; // 终端权重
+
+        // 构建 R_bar
+        Eigen::MatrixXd R_bar = Eigen::MatrixXd::Zero(N * control_dim, N * control_dim);
+        for (int i = 0; i <= N - 1; ++ i) {
+
+            R_bar.block<2, 2>(i * control_dim, i * control_dim) = R;
+        }
+
+        // 输出
+        MPCmatrices mpcm_out;
+        Eigen::VectorXd E = M * x_k - X_ref;
+        mpcm_out.H = C.transpose() * Q_bar * C + R_bar;
+        mpcm_out.f = C.transpose() * Q_bar * E;
+        mpcm_out.G = E.transpose() * Q_bar * E;
+
+        return mpcm_out;
     }
 
     geometry_msgs::msg::TwistStamped MyMPCController::computeVelocityCommands(
         const geometry_msgs::msg::PoseStamped & pose,
         const geometry_msgs::msg::Twist & velocity,
-        nav2_core::GoalChecker *goal_checker) {
+        nav2_core::GoalChecker */*goal_checker*/) {
 
         auto node = node_.lock();
-        auto costmap = costmap_ros_->getCostmap();
+        // FIXME：核心代码
+        // x_k
+        double 
+            x = pose.pose.position.x,
+            y = pose.pose.position.y,
+            theta = tf2::getYaw(pose.pose.orientation);
+        Eigen::Vector3d x_k(x, y, theta);
+        
+        // dt
+        double dt;
+        static rclcpp::Time last_time = clock_->now();
+        rclcpp::Time current_time = clock_->now();
+        dt = (current_time - last_time).seconds();
+        if (dt <= 0.0 || dt > 0.5) dt = dt_;
+        last_time = current_time;
+
+        // X_ref
+        Eigen::VectorXd X_ref = sampleReferencePath(processed_path_, x_k, velocity.linear.x, N_, dt);
+
+        // 线性化AB
+        Eigen::Matrix3d A;
+        Eigen::Matrix<double, 3, 2> B;
+        updateDiscreteModel(A, B, theta, std::max(std::abs(velocity.linear.x), 0.1), dt); // 暂时先这样
+        
+        // 构建HfG
+        MPCmatrices mpcm = replaceLargeMatrix(A, B, x_k, X_ref, Q_, R_, F_, N_);
+
+        // 求解U
+        Eigen::VectorXd U_sol;
+        U_sol = -mpcm.H.ldlt().solve(mpcm.f);
+        // TODO：最终求解器
+
+        double
+            v_cmd = U_sol(0),
+            w_cmd = U_sol(1);
+
+        // 封装
+        geometry_msgs::msg::TwistStamped cmd_vel;
+        cmd_vel.header.stamp = clock_->now();
+        cmd_vel.header.frame_id = "base_link";
+        cmd_vel.twist.linear.x = v_cmd;
+        cmd_vel.twist.angular.z = w_cmd;
+        return cmd_vel;
     }
     void MyMPCController::activate() { RCLCPP_INFO(logger_, "插件已激活"); }
     void MyMPCController::deactivate() { RCLCPP_INFO(logger_, "插件已停用"); }
