@@ -1,9 +1,9 @@
 <library path="my_nav2_smoother_lib">
-    <class name="my_nav2_smoother/MyGradientSmoother" 
-            type="my_nav2_smoother::MyGradientSmoother" 
+    <class name="my_bspline_smoother/MyBSplineSmoother" 
+            type="my_bspline_smoother::MyBSplineSmoother"
             base_class_type="nav2_core::Smoother">
         <description>
-            简单的梯度下降路径平滑器
+            B-Spline平滑器
         </description>
     </class>
 </library>

@@ -17,13 +17,19 @@ find_package(pluginlib REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(osqp_vendor REQUIRED)
+find_package(osqp REQUIRED)
 
 # 添加头文件目录
-include_directories(include)
+include_directories(
+  include
+  ${Eigen3_INCLUDE_DIRS}
+)
 
 # 编译动态库 (Shared Library)
 add_library(${PROJECT_NAME}_lib SHARED
-  src/gradient_smoother.cpp
+  src/bspline_smoother.cpp
 )
 ament_target_dependencies(${PROJECT_NAME}_lib
   rclcpp
@@ -36,6 +42,12 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   tf2
   tf2_ros
   tf2_geometry_msgs
+  osqp
+  Eigen3
+)
+
+target_link_libraries(${PROJECT_NAME}_lib
+  osqp::osqp
 )
 
 pluginlib_export_plugin_description_file(nav2_core plugins.xml)

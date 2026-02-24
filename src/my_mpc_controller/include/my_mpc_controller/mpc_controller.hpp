@@ -112,16 +112,16 @@ namespace my_mpc_controller {
         double dt_ = 0.1; // 采样时间 - 动态
         rclcpp::Duration transform_tolerance_{0, 0};
         double // 方便传数据
-            q_11 = 20.0,
-            q_22 = 20.0,
-            q_33 = 1.0;
+            q_11 = 30.0, // x
+            q_22 = 30.0, // y
+            q_33 = 30.0; // theta
         double
-            r_11 = 0.1,
-            r_22 = 0.075;
+            r_11 = 0.1, // v
+            r_22 = 0.25; // w
         double
-            f_11 = 40.0,
-            f_22 = 40.0,
-            f_33 = 2.0;
+            f_11 = 40.0, // x
+            f_22 = 40.0, // y
+            f_33 = 40.0; // theta
         Eigen::Matrix3d Q_; // 状态权重矩阵
         Eigen::Matrix2d R_; // 控制权重矩阵
         Eigen::Matrix3d F_; // 终端控制矩阵

@@ -21,28 +21,28 @@ namespace my_mpc_controller {
         clock_ = node->get_clock();
 
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".q_11", rclcpp::ParameterValue(20.0));
+            node, plugin_name_ + ".q_11", rclcpp::ParameterValue(30.0));
         node->get_parameter(plugin_name_ + ".q_11", q_11);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".q_22", rclcpp::ParameterValue(20.0));
+            node, plugin_name_ + ".q_22", rclcpp::ParameterValue(30.0));
         node->get_parameter(plugin_name_ + ".q_22", q_22);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".q_33", rclcpp::ParameterValue(1.0));
+            node, plugin_name_ + ".q_33", rclcpp::ParameterValue(30.0));
         node->get_parameter(plugin_name_ + ".q_33", q_33);
         nav2_util::declare_parameter_if_not_declared(
             node, plugin_name_ + ".r_11", rclcpp::ParameterValue(0.1));
         node->get_parameter(plugin_name_ + ".r_11", r_11);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".r_22", rclcpp::ParameterValue(0.075));
+            node, plugin_name_ + ".r_22", rclcpp::ParameterValue(0.5));
         node->get_parameter(plugin_name_ + ".r_22", r_22);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".f_11", rclcpp::ParameterValue(40.0));
+            node, plugin_name_ + ".f_11", rclcpp::ParameterValue(60.0));
         node->get_parameter(plugin_name_ + ".f_11", f_11);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".f_22", rclcpp::ParameterValue(40.0));
+            node, plugin_name_ + ".f_22", rclcpp::ParameterValue(60.0));
         node->get_parameter(plugin_name_ + ".f_22", f_22);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".f_33", rclcpp::ParameterValue(2.0));
+            node, plugin_name_ + ".f_33", rclcpp::ParameterValue(60.0));
         node->get_parameter(plugin_name_ + ".f_33", f_33);
 
         Q_.setIdentity(); 
@@ -342,7 +342,7 @@ namespace my_mpc_controller {
 
         // 求解U
         Eigen::VectorXd U_sol;
-        U_sol = -mpcm.H.ldlt().solve(mpcm.f);
+        U_sol = (mpcm.H + 1e-6 * Eigen::MatrixXd::Identity(mpcm.H.rows(), mpcm.H.cols())).ldlt().solve(-mpcm.f); // LM方法
         // TODO：最终求解器
 
         double

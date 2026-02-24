@@ -122,12 +122,12 @@ controller_server:
       n: 10
       q_11: 30.0
       q_22: 30.0
-      q_33: 1.0
-      r_11: 0.01
-      r_22: 0.01
-      f_11: 40.0
-      f_22: 40.0
-      f_33: 1.5
+      q_33: 15.0
+      r_11: 0.1
+      r_22: 1.0
+      f_11: 60.0
+      f_22: 60.0
+      f_33: 30.0
       transform_tolerance: 0.1
       goal_checker_plugin: "general_goal_checker"
       progress_checker_plugin: "progress_checker"
@@ -253,10 +253,9 @@ smoother_server:
     use_sim_time: True
     smoother_plugins: ["simple_smoother"]
     simple_smoother:
-      plugin: "my_nav2_smoother/MyGradientSmoother"
-      alpha: 0.2
-      beta: 0.35
-      max_iterations: 600
+      plugin: "my_bspline_smoother/MyBSplineSmoother"
+      w_smooth: 10.0
+      w_guide: 1.0
 
 behavior_server:
   ros__parameters:
