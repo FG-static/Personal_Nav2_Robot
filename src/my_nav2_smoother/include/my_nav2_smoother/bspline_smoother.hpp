@@ -44,10 +44,12 @@ namespace my_bspline_smoother {
         // 平滑算法
         void applyBSplineAlgorithm(nav_msgs::msg::Path &path, const nav_msgs::msg::Path &raw_path);
         bool solveBSplineQP(
-            const std::vector<double> &p_ref,
+            const std::vector<double> &p_ref_x,
+            const std::vector<double> &p_ref_y,
             double w_s,
             double w_g,
-            std::vector<double> &p_smooth);
+            std::vector<double> &p_smooth_x,
+            std::vector<double> &p_smooth_y);
 
         // bspline参数
         double 

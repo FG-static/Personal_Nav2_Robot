@@ -37,8 +37,6 @@ namespace my_bspline_smoother {
 
         if (path.poses.size() < 4) return true;
         nav_msgs::msg::Path raw_path = path;
-
-        // FIXME：其他参数处理
         applyBSplineAlgorithm(path, raw_path);
 
         return true;
@@ -58,15 +56,14 @@ namespace my_bspline_smoother {
             ref_path_y,
             smooth_path_x,
             smooth_path_y;
-        for (int i = 0; i < raw_path.poses.size(); ++ i) {
+        for (size_t i = 0; i < raw_path.poses.size(); ++ i) {
 
             ref_path_x.push_back(raw_path.poses[i].pose.position.x);
             ref_path_y.push_back(raw_path.poses[i].pose.position.y);
         }
-        solveBSplineQP(ref_path_x, w_smooth_, w_guide_, smooth_path_x);
-        solveBSplineQP(ref_path_y, w_smooth_, w_guide_, smooth_path_y);
+        solveBSplineQP(ref_path_x, ref_path_y, w_smooth_, w_guide_, smooth_path_x, smooth_path_y);
         int n = smooth_path_x.size();
-        for (size_t i = 0; i < n; ++ i) {
+        for (int i = 0; i < n; ++ i) {
 
             double yaw;
             
@@ -97,14 +94,16 @@ namespace my_bspline_smoother {
      * @return 成功返回true
      */
     bool MyBSplineSmoother::solveBSplineQP(
-        const std::vector<double> &p_ref,
+        const std::vector<double> &p_ref_x,
+        const std::vector<double> &p_ref_y,
         double w_s,
         double w_g,
-        std::vector<double> &p_smooth
+        std::vector<double> &p_smooth_x,
+        std::vector<double> &p_smooth_y
     ) {
 
         RCLCPP_INFO(node_->get_logger(), "BSpline算法启动");
-        int n = p_ref.size();
+        int n = p_ref_x.size();
         if (n < 4) return false;
 
         Eigen::SparseMatrix<double> H(n, n);
@@ -127,30 +126,38 @@ namespace my_bspline_smoother {
         }
         H.setFromTriplets(triplets.begin(), triplets.end());
 
-        Eigen::VectorXd f(n);
-        for (int i = 0; i < n; ++ i) f(i) = -w_g * p_ref[i];
+        Eigen::VectorXd f_x(n), f_y(n);
+        for (int i = 0; i < n; ++ i) {
+            
+            f_x(i) = -w_g * p_ref_x[i];
+            f_y(i) = -w_g * p_ref_y[i];
+        }
 
         // 边界约束
-        Eigen::VectorXd lower_bound(n), upper_bound(n);
+        Eigen::VectorXd l_x(n), u_x(n), l_y(n), u_y(n);
         for (int i = 0; i < n; ++i) {
 
-            lower_bound(i) = p_ref[i] - 1.0; 
-            upper_bound(i) = p_ref[i] + 1.0;
+            l_x(i) = p_ref_x[i] - 1.0; 
+            u_x(i) = p_ref_x[i] + 1.0;
+            l_y(i) = p_ref_y[i] - 1.0; 
+            u_y(i) = p_ref_y[i] + 1.0;
             if (i < 2 || i > n - 3) {
 
-                lower_bound(i) = p_ref[i];
-                upper_bound(i) = p_ref[i];
+                l_x(i) = p_ref_x[i];
+                u_x(i) = p_ref_x[i];
+                l_y(i) = p_ref_y[i];
+                u_y(i) = p_ref_y[i];
             }
         }
         
         // OSQP求解
-        RCLCPP_INFO(node_->get_logger(), "OSQP开始初始化");
         OSQPSettings *settings = (OSQPSettings*)c_malloc(sizeof(OSQPSettings));
         OSQPData *data = (OSQPData*)c_malloc(sizeof(OSQPData));
-        Eigen::SparseMatrix<double, Eigen::ColMajor, int> H_csc = H.triangularView<Eigen::Upper>(); // csc形式
-        Eigen::SparseMatrix<double, Eigen::ColMajor, int> A_csc(n, n);
+        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> H_csc = H.triangularView<Eigen::Upper>(); // csc形式
+        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> A_csc(n, n);
         A_csc.setIdentity();
         A_csc.makeCompressed();
+        H_csc.makeCompressed();
 
         data->n = n; // 变量
         data->m = n; // 约束
@@ -161,7 +168,7 @@ namespace my_bspline_smoother {
             (c_int*)H_csc.innerIndexPtr(),
             (c_int*)H_csc.outerIndexPtr()
         );
-        data->q = f.data(); // 一次项
+        data->q = f_x.data(); // 一次项
         data->A = csc_matrix( // 约束矩阵
             n, n, 
             A_csc.nonZeros(),
@@ -171,28 +178,37 @@ namespace my_bspline_smoother {
         );
 
         // 约束向量
-        data->l = lower_bound.data();
-        data->u = upper_bound.data();
+        data->l = l_x.data();
+        data->u = u_x.data();
 
         // 开始求解
         osqp_set_default_settings(settings);
         settings->warm_start = 1;
         settings->verbose = 0; // 生产环境关闭日志
-        RCLCPP_INFO(node_->get_logger(), "OSQP正在初始化");
 
         OSQPWorkspace *work = nullptr;
         c_int status = osqp_setup(&work, data, settings);
         bool success = false;
         if (status == 0 && work) {
 
-            RCLCPP_INFO(node_->get_logger(), "OSQP开始求解");
             osqp_solve(work);
             if (work->info->status_val >= 0 && work->solution) {
 
-                p_smooth.resize(n);
+                p_smooth_x.resize(n);
                 for (int i = 0; i < n; ++ i) {
 
-                    p_smooth[i] = work->solution->x[i];
+                    p_smooth_x[i] = work->solution->x[i];
+                }
+            }
+            osqp_update_lin_cost(work, f_y.data());
+            osqp_update_bounds(work, l_y.data(), u_y.data());
+            osqp_solve(work);
+            if (work->info->status_val >= 0 && work->solution) {
+
+                p_smooth_y.resize(n);
+                for (int i = 0; i < n; ++ i) {
+
+                    p_smooth_y[i] = work->solution->x[i];
                 }
                 success = true;
             }
