@@ -313,7 +313,6 @@ namespace my_mpc_controller {
         nav2_core::GoalChecker */*goal_checker*/) {
 
         auto node = node_.lock();
-        // FIXME：核心代码
         // x_k
         double 
             x = pose.pose.position.x,
@@ -343,7 +342,7 @@ namespace my_mpc_controller {
         // 求解U
         Eigen::VectorXd U_sol;
         U_sol = (mpcm.H + 1e-6 * Eigen::MatrixXd::Identity(mpcm.H.rows(), mpcm.H.cols())).ldlt().solve(-mpcm.f); // LM方法
-        // TODO：最终求解器
+        // TODO：有机会可用osqp求约束解
 
         double
             v_cmd = U_sol(0),

@@ -2,6 +2,8 @@
 build/
 install/
 log/
+*.gv
+*.pdf
 
 # --- Python & System ---
 __pycache__/
