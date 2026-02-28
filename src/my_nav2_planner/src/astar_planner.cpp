@@ -54,11 +54,11 @@ namespace my_nav2_planner {
         int width = costmap_->getSizeInCellsX(), 
             height = costmap_->getSizeInCellsY();
         int map_size = width * height;
-        std::vector<double> g_values(map_size, std::numeric_limits<double>::max());
-        std::vector<int> parent_map(map_size, -1);
+        std::vector<double> g_values(map_size, std::numeric_limits<double>::max()); // 从起点到每个节点的实际代价
+        std::vector<int> parent_map(map_size, -1); // 记录每个节点的父节点索引，便于回溯路径
 
-        typedef std::pair<double, int> Node;
-        std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open_list;
+        typedef std::pair<double, int> Node; // A*算法中的节点，包含f值（g+h）和节点索引
+        std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open_list; // A*算法的优先队列，按照f值（g+h）排序
 
         int start_idx = my_start * width + mx_start,
             goal_idx = my_goal * width + mx_goal;

@@ -23,7 +23,7 @@ include_directories(include)
 
 # 编译动态库 (Shared Library)
 add_library(${PROJECT_NAME}_lib SHARED
-  src/astar_planner.cpp
+  src/rrtstar_planner.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}_lib
