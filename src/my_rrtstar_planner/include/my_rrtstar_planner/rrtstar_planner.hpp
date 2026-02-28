@@ -1,5 +1,5 @@
-#ifndef MY_NAV2_PLANNER__RRTSTAR_PLANNER
-#define MY_NAV2_PLANNER__RRTSTAR_PLANNER
+#ifndef MY_RRTSTAR_PLANNER__RRTSTAR_PLANNER
+#define MY_RRTSTAR_PLANNER__RRTSTAR_PLANNER
 
 #include <memory>
 #include <string>
@@ -66,7 +66,7 @@ namespace my_rrtstar_planner {
         std::uniform_real_distribution<double> uni_y;
 
         // RRT*算法参数
-        double step_size_ = 1.0; // 扩展步长，单位 m
+        double step_size_ = 0.5; // 扩展步长，单位 m
         int max_iterations_ = 50000; // 最大迭代次数
         int max_iterations_after_goal_ = 1000; // 在找到目标后继续迭代以优化路径的次数
         double 
@@ -77,4 +77,4 @@ namespace my_rrtstar_planner {
     };
 } // namespace my_rrtstar_planner
 
-#endif // MY_NAV2_PLANNER__RRTSTAR_PLANNER
+#endif // MY_RRTSTAR_PLANNER__RRTSTAR_PLANNER

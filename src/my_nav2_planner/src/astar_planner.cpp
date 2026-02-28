@@ -68,6 +68,8 @@ namespace my_nav2_planner {
 
         bool found_path = false;
 
+        // 记录算法耗时
+        auto start_time = std::chrono::steady_clock::now();
         // 开始寻路
         while (!open_list.empty()) {
 
@@ -113,6 +115,10 @@ namespace my_nav2_planner {
                 }
             }
         }
+        // 记录算法耗时
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+        RCLCPP_INFO(node_->get_logger(), "A* planning completed in %ld ms", duration_ms);
         if (found_path) {
 
             std::vector<int> path_;

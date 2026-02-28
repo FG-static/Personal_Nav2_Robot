@@ -1,0 +1,9 @@
+<library path="my_rrtstar_planner_lib">
+    <class name="my_rrtstar_planner/MyRRTStarPlanner" 
+            type="my_rrtstar_planner::MyRRTStarPlanner" 
+            base_class_type="nav2_core::GlobalPlanner">
+        <description>
+            简单的RRT*规划器
+        </description>
+    </class>
+</library>

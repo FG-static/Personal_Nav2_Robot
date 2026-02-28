@@ -1,4 +1,4 @@
-#include "my_nav2_planner/rrtstar_planner.hpp"
+#include "my_rrtstar_planner/rrtstar_planner.hpp"
 #include "nav2_core/planner_exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
@@ -120,7 +120,6 @@ namespace my_rrtstar_planner {
         double step_size_cells = step_size_ / resolution;
         double search_radius_cells = search_radius_ / resolution;
         double goal_tolerance_cells = goal_tolerance_ / resolution;
-        // TODO：RRT*算法实现
 
         int start_idx = my_start * width + mx_start,
             goal_idx = my_goal * width + mx_goal;
@@ -138,7 +137,6 @@ namespace my_rrtstar_planner {
         auto start_time = std::chrono::steady_clock::now();
         for (int iter = 0; iter < max_iterations_; ++ iter) {
 
-            // FIXME：RRT*算法有bug，待修复
             // 如果找到更优路径，更新 best_cost 和 found_path
             double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
             int sample_idx; // 采样点在地图中的索引
@@ -167,12 +165,15 @@ namespace my_rrtstar_planner {
                     dist_to_sample = sqrt(ddx * ddx + ddy * ddy);
                 
                 if (dist_to_sample < search_radius_cells) {
+
+                    // TODO：KD-Tree优化或网格哈希算法优化
                     double cost_via_this_node = tree[i].cost + dist_to_sample;
                     
                     // 检查这条路径是否碰撞
                     if (!isCollisionFreePath(tree[i].pos_idx, sample_idx)) continue;
                     
                     if (cost_via_this_node < best_parent_cost) {
+
                         best_parent_cost = cost_via_this_node;
                         best_parent_idx = i;
                     }
@@ -231,11 +232,11 @@ namespace my_rrtstar_planner {
 
                 if (dist_to_new_node < search_radius_cells) {
 
+                    // TODO：KD-Tree优化或网格哈希算法优化
                     double cost_via_new_node = cost_to_new_node + dist_to_new_node;
 
                     if (cost_via_new_node < tree[i].cost) { // 通过新节点到达该节点更优，尝试重连
 
-                        // TODO：检查从新节点到该节点的路径是否碰撞，如果不碰撞则重连
                         bool is_collision_free_path =
                             isCollisionFreePath(tree[i].pos_idx, new_idx);
 
