@@ -116,10 +116,11 @@ namespace my_rrtstar_planner {
             height = costmap_->getSizeInCellsY();
         int map_size = width * height;
         // 将米为单位的参数转换为地图格子数，保持单位一致
-        double resolution = costmap_->getResolution();
-        double step_size_cells = step_size_ / resolution;
-        double search_radius_cells = search_radius_ / resolution;
-        double goal_tolerance_cells = goal_tolerance_ / resolution;
+        double 
+            resolution = costmap_->getResolution(),
+            step_size_cells = step_size_ / resolution,
+            search_radius_cells = search_radius_ / resolution,
+            goal_tolerance_cells = goal_tolerance_ / resolution;
 
         int start_idx = my_start * width + mx_start,
             goal_idx = my_goal * width + mx_goal;

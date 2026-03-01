@@ -253,7 +253,7 @@ planner_server:
       goal_tolerance: 0.5
       collision_check_resolution: 0.02
       max_iterations_after_goal: 1000
-      # A*
+      # A*  1ms
       plugin: "my_nav2_planner/MyAStarPlanner"
       unknown_cost: 5.0
       interpolation_resolution: 0.1
