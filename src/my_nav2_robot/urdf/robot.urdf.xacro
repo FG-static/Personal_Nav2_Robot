@@ -19,6 +19,10 @@
     <xacro:property name="laser_radius" value="0.03"/>
     <xacro:property name="laser_height" value="0.04"/>
 
+    <!--深度相机形态-->
+    <xacro:property name="camera_radius" value="0.03"/>
+    <xacro:property name="camera_height" value="0.04"/>
+
     <!--机器人机身的物理属性-->
     <xacro:macro name="inertial_box" params="mass l w h *origin">
         <inertial>
@@ -132,13 +136,6 @@
             </geometry>
             <material name="red"/>
         </visual>
-        <!--
-        <collision>
-            <geometry>
-                <cylinder radius="${laser_radius}" length="${laser_height}"/>
-            </geometry>
-        </collision>
-        -->
         <xacro:inertial_cylinder mass="0.1" r="${laser_radius}" h="${laser_height}">
             <origin xyz="0 0 0" rpy="0 0 0"/>
         </xacro:inertial_cylinder>
@@ -150,6 +147,27 @@
         <origin xyz="0 0 ${chassis_height + laser_height / 2}" rpy="0 0 0"/>
     </joint>
 
+    <!--深度相机-->
+    <!--物理位置-->
+    <link name="camera_link">
+        <visual>
+            <geometry>
+                <cylinder radius="${laser_radius}" length="${laser_height}"/>
+            </geometry>
+            <material name="blue"/>
+        </visual>
+        <xacro:inertial_cylinder mass="0.1" r="${laser_radius}" h="${laser_height}">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <joint name="camera_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="camera_link"/>
+        <origin xyz="0.2 0 ${chassis_height + laser_height / 2 - 0.06}" rpy="0 0 0"/>
+    </joint>
+
+    <!--雷达插件-->
     <gazebo reference="laser_link">
         <sensor name="gpu_lidar" type="gpu_lidar">
             <topic>scan</topic>
@@ -172,29 +190,36 @@
                     <resolution>0.01</resolution>
                 </range>
             </lidar>
-            <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
-                <render_engine>ogre2</render_engine>
-            </plugin>
         </sensor>
-        <sensor name="camera" type="camera">
-            <pose>0.2 0 0.2 0 0 0</pose> <update_rate>30</update_rate>
-            <frame_id>laser_link</frame_id>
-            <gz_frame_id>laser_link</gz_frame_id>
+    </gazebo>
+
+    <!--深度相机插件-->
+    <gazebo reference="camera_link">
+        <sensor name="depth_camera" type="rgbd_camera">
             <visualize>true</visualize>
-            <topic>camera/image_raw</topic> 
+            <update_rate>10.0</update_rate>
+            <topic>depth_camera</topic>
+            <gz_frame_id>camera_link</gz_frame_id>
             <camera>
-                <horizontal_fov>1.089</horizontal_fov>
+                <horizontal_fov>1.047198</horizontal_fov>
                 <image>
                     <width>640</width>
                     <height>480</height>
                     <format>R8G8B8</format>
                 </image>
                 <clip>
-                    <near>0.05</near>
-                    <far>8.0</far>
+                    <near>0.1</near>
+                    <far>5.0</far>
                 </clip>
             </camera>
         </sensor>
+    </gazebo>
+
+    <!--全局挂载插件-->
+    <gazebo>
+        <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+            <render_engine>ogre2</render_engine>
+        </plugin>
     </gazebo>
 
     <gazebo reference="front_left_wheel_link">
