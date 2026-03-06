@@ -35,6 +35,12 @@ namespace nav2_visual_processing {
 
         if (!is_first_f_) {
 
+            if (last_f_.descriptors.empty() || cur_f.descriptors.empty()) { // 检查
+
+                RCLCPP_WARN(this->get_logger(), "特征点不足，跳过此帧解算");
+                last_f_ = cur_f; // 更新上一帧，防止卡死
+                return;
+            }
             estimate_motion(last_f_, cur_f);
         }
 
@@ -64,7 +70,6 @@ namespace nav2_visual_processing {
         // 获取点云的宽高信息
         int width = pc_msg->width;       // 点云的宽度（列数）
         int height = pc_msg->height;     // 点云的高度（行数）
-        int row_step = pc_msg->row_step; // 点云每行占用的字节数
 
         // 创建点云坐标迭代器，用于按索引访问点云的x, y, z坐标
         sensor_msgs::PointCloud2ConstIterator<float> iter_x(*pc_msg, "x");
