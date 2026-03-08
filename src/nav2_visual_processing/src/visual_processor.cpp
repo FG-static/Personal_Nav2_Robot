@@ -122,7 +122,7 @@ namespace nav2_visual_processing {
      * @param f1 上一帧
      * @param f2 当前帧
      */
-    void VisualProcessorNode::estimate_motion(
+    Eigen::Matrix4d VisualProcessorNode::estimate_motion(
         const Frame &f1,
         const Frame &f2
     ) {
@@ -178,6 +178,14 @@ namespace nav2_visual_processing {
 
         RCLCPP_INFO(this->get_logger(), "解算平移 t: x=%f, y=%f, z=%f", t.x(), t.y(), t.z());
 
+        // 转换李群对应T返回
+        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+
+        T.block<3, 3>(0, 0) = R;
+        T.block<3, 1>(0, 3) = t;
+
+        return T;
+
         // 可视化匹配结果
         cv::Mat match_img = visualize_matches(f1, f2, matches);
         
@@ -213,6 +221,38 @@ namespace nav2_visual_processing {
 
         return match_img;
     }
+
+    bool VisualProcessorNode::should_switch_to_recovery() {
+    
+        // TODO：实现判断是否切换到恢复状态
+    }
+
+    void VisualProcessorNode::switch_to_tracking_state() {
+
+        // TODO：实现跟踪状态切换
+    }
+
+    void VisualProcessorNode::switch_to_recovery_state() {
+
+        // TODO：实现恢复状态切换
+    }
+
+    /**
+     * @brief 通过全局ICP算法估计两帧之间的相机运动
+     * @param f1 上一帧
+     * @param f2 当前帧
+     * @param alignment_score 全局ICP算法的对齐得分
+     * @return Eigen::Matrix4d 全局ICP算法估计的相机运动
+     */
+    Eigen::Matrix4d VisualProcessorNode::estimate_motion_with_gicp(
+        const Frame &f1,
+        const Frame &f2,
+        double &alignment_score
+    ) {
+
+        // TODO：实现全局ICP算法
+    }
+
 } // namespace nav2_visual_processing
 
 int main(int argc, char **argv) {
