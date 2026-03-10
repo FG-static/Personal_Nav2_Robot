@@ -8,6 +8,8 @@
 #include "message_filters/subscriber.h"
 #include "message_filters/time_synchronizer.h"
 #include "message_filters/sync_policies/approximate_time.h"
+#include "tf2_ros/transform_broadcaster.h"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 
 #include <opencv2/opencv.hpp>
 #include <Eigen/Core>
@@ -17,12 +19,60 @@
 #include <pcl_conversions/pcl_conversions.h> // ros2和pcl消息互转
 #include <pcl-1.14/pcl/filters/voxel_grid.h> // 滤波器
 #include <pcl-1.14/pcl/common/transforms.h> // 点云坐标变换
+
+#include <unordered_map>
+
+// FLANN (used by small_gicp) expects a serialization implementation for
+// std::unordered_map when saving/loading LSH indices. The system FLANN
+// version shipped with Ubuntu does not provide this specialization, so we
+// provide it here to avoid compilation errors.
+namespace flann {
+namespace serialization {
+
+// Forward-declare the primary template so we can provide a specialization
+// before the full FLANN serialization headers are included.
+template<typename T>
+struct Serializer;
+
+template<typename K, typename V>
+struct Serializer<std::unordered_map<K, V>>
+{
+  template<typename InputArchive>
+  static inline void load(InputArchive &ar, std::unordered_map<K, V> &map_val)
+  {
+    size_t size;
+    ar & size;
+    for (size_t i = 0; i < size; ++i) {
+      K key;
+      V value;
+      ar & key;
+      ar & value;
+      map_val.emplace(std::move(key), std::move(value));
+    }
+  }
+
+  template<typename OutputArchive>
+  static inline void save(OutputArchive &ar, const std::unordered_map<K, V> &map_val)
+  {
+    ar & map_val.size();
+    for (const auto &kv : map_val) {
+      ar & kv.first;
+      ar & kv.second;
+    }
+  }
+};
+
+}  // namespace serialization
+}  // namespace flann
+
 #include <small_gicp/pcl/pcl_registration.hpp> // pcl结合使用
 #include <small_gicp/registration/registration.hpp> // 核心注册算法
+#include <small_gicp/factors/gicp_factor.hpp>
 // 导入头文件为点云计算协方差
 
 
 #include <vector>
+#include <array>
 
 namespace nav2_visual_processing {
 
@@ -49,8 +99,22 @@ namespace nav2_visual_processing {
         VisualProcessorNode();
     private:
 
+        // camera_link -> map
+        std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+        void publish_tf(
+            const Eigen::Matrix4d &pose,
+            const rclcpp::Time &stamp
+        );
+
         // ==================== 状态机管理 ====================
-        TrackingState current_state_;  // 当前状态
+        using MotionEstimatorFn = Eigen::Matrix4d (VisualProcessorNode::*)(
+            const Frame &f1,
+            const Frame &f2,
+            double &alignment_score
+        );
+
+        TrackingState current_state_ = RECOVERY;  // 当前状态
 
         // 状态转换函数
         void switch_to_recovery_state();
@@ -58,6 +122,29 @@ namespace nav2_visual_processing {
 
         // 检查是否需要进行状态转换的函数
         bool should_switch_to_recovery();
+        bool should_switch_to_tracking(const Eigen::Matrix4d &motion);
+
+        // 通用运动估计算法入口（根据当前状态选择对应算法）
+        Eigen::Matrix4d estimate_motion_by_state(
+            const Frame &f1,
+            const Frame &f2,
+            double &alignment_score
+        );
+
+        // 适配器：将各状态的运动估计算法统一为同一签名
+        Eigen::Matrix4d estimate_motion_svd_adapter(
+            const Frame &f1,
+            const Frame &f2,
+            double &alignment_score
+        );
+        Eigen::Matrix4d estimate_motion_gicp_adapter(
+            const Frame &f1,
+            const Frame &f2,
+            double &alignment_score
+        );
+
+        // 状态对应的运动估计算法数组
+        std::array<MotionEstimatorFn, STATEMAX> motion_estimators_;
 
         // ==================== 异步回调函数 ====================
         void sync_callback(
@@ -73,7 +160,7 @@ namespace nav2_visual_processing {
     
         // Recovery状态的处理函数框架
         // SVD解算位姿
-        Eigen::Matrix4d estimate_motion(
+        Eigen::Matrix4d estimate_motion_svd(
             const Frame &f1,
             const Frame &f2
         );
@@ -96,6 +183,14 @@ namespace nav2_visual_processing {
             const std::vector<cv::DMatch> &matches
         );
 
+        // 发布点云到rviz2
+        rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr aligned_pc_pub_;
+
+        // 数据转换函数
+        pcl::PointCloud<pcl::PointXYZ>::Ptr vectorToPcl(
+            const std::vector<Eigen::Vector3d> &points
+        );
+
         // 消息同步
         using SyncPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image, sensor_msgs::msg::PointCloud2>;
         std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::Image>> img_sub_;
@@ -103,8 +198,15 @@ namespace nav2_visual_processing {
         std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
 
         // ==================== GICP相关变量（Tracking状态） ====================
-        // GICP对齐分数的阈值（用于判断是否需要切换到Recovery状态）
-        double gicp_score_threshold_ = 0.5;
+        // 开启滤波器
+        bool enable_voxel_filter_ = false;
+        double voxel_leaf_size_ = 0.01; // 滤波器的分辨率
+
+        // GICP对齐分数的阈值以及显著运动阈值（用于判断是否需要切换状态）
+        double 
+            gicp_score_threshold_ = 0.5,
+            move_threshold_ = 0.01,
+            angle_threshold_ = 0.1;
         
         // GICP最后一次的对齐分数
         double last_gicp_score_ = 0.0;
