@@ -4,6 +4,7 @@ install/
 log/
 *.gv
 *.pdf
+serial_driver/
 
 # --- Python & System ---
 __pycache__/
@@ -23,3 +24,6 @@ venv/
 # --- Gazebo & Logs ---
 *.log
 /tmp/
+
+# --- AI ---
+AGENTS.md

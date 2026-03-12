@@ -3,7 +3,7 @@
 
 namespace nav2_visual_processing {
     
-    VisualProcessorNode::VisualProcessorNode() : Node("visual_processor_node") {
+    VisualProcessorNode::VisualProcessorNode(const rclcpp::NodeOptions & options) : Node("visual_processor_node", options) {
 
         // 初始化
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -63,6 +63,13 @@ namespace nav2_visual_processing {
         
         cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::RGB8);
 
+        // 使用图像时间戳作为 TF 时间戳（如果没有，则使用当前时间）
+        rclcpp::Time stamp = img_msg->header.stamp;
+        if (stamp.nanoseconds() == 0) {
+
+            stamp = this->get_clock()->now();
+        }
+
         // 提取特征和3D点
         Frame cur_f = extract_frame(cv_ptr->image, pc_msg);
 
@@ -75,7 +82,7 @@ namespace nav2_visual_processing {
                 last_f_ = cur_f; // 更新上一帧，防止卡死
                 return;
             }
-            GICP:
+            GICP: // GICP解算跳转
 
             double alignment_score = 0.0;
             Eigen::Matrix4d motion = estimate_motion_by_state(last_f_, cur_f, alignment_score);
@@ -97,20 +104,14 @@ namespace nav2_visual_processing {
         is_first_f_ = false;
     }
 
-    /**
-     * @brief 从彩色图像和点云数据中提取特征帧
-     * @param color_img 彩色图像
-     * @param pc_msg 点云数据
-     * @return Frame 包含特征点、描述子和3D点的帧结构
-     */
-    Frame VisualProcessorNode::extract_frame(
+    Frame VisualProcessorNode::extract_frame_orb(
         const cv::Mat &color_img,
         const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pc_msg
     ) {
-        
+
         Frame f;
         f.color = color_img;
-        
+
         // 使用ORB算法检测图像中的特征点，并计算描述子-HammingCode
         // f.keypoints: 存储检测到的特征点位置
         // f.descriptors: 存储每个特征点的描述子向量
@@ -123,6 +124,83 @@ namespace nav2_visual_processing {
             f.descriptors = cv::Mat(); // 空描述子
         }
 
+        return f;
+    }
+
+    /**
+     * @brief 从彩色图像和点云数据中提取特征帧
+     * @param color_img 彩色图像
+     * @param pc_msg 点云数据
+     * @return Frame 包含特征点、描述子和3D点的帧结构
+     */
+    Frame VisualProcessorNode::extract_frame(
+        const cv::Mat &color_img,
+        const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pc_msg
+    ) {
+        
+        Frame f, tmpf;
+        f.color = color_img;
+        
+        // 如果未开启光流或需要精确计算特征点重新分配gicp初始值时，则用orb算法检测特征点并计算描述子
+        if (!is_lk_flow_ || current_state_ == RECOVERY) {
+
+            tmpf = extract_frame_orb(color_img, pc_msg);
+        } else {
+
+            // 否则用光流法计算特征点位置
+            cv::cvtColor(color_img, f.gray, cv::COLOR_BGR2GRAY);
+
+            // 开始光流追踪
+            std::vector<cv::Point2f> next_kpts;
+            std::vector<uchar> status;
+            std::vector<float> err;
+            cv::calcOpticalFlowPyrLK(
+                last_f_.gray, f.gray,
+                last_f_.kpts_2d, next_kpts,
+                status, err,
+                cv::Size(21, 21), 3
+            );
+
+            f.keypoints.clear();
+
+            // 整理追踪成功点对
+            std::vector<cv::Point2f> matched_last, matched_curr, matched_last_3d, matched_last_kpts;
+            for (size_t i = 0; i < status.size(); i ++) {
+
+                // 匹配成功且上一帧有对应3D点
+                if (status[i] && !last_f_.points_3d[i].isZero()) {
+
+                    matched_curr.push_back(next_kpts[i]);
+                    f.keypoints.emplace_back(next_kpts[i], 1.0f);
+
+                    matched_last.push_back(last_f_.kpts_2d[i]);
+                    matched_last_kpts.push_back(last_f_.keypoints[i]);
+                    matched_last_3d.push_back(last_f_.points_3d[i]);
+                }
+            }
+            f.kpts_2d = matched_curr;
+            last_f_.kpts_2d = matched_last;
+            last_f_.keypoints = matched_last_kpts;
+            last_f_.points_3d = matched_last_3d;
+
+            // 传给f的KeyPoint类型的keypoints变量
+            for (const auto &pt : f.kpts_2d) {
+
+                cv::KeyPoint kp;
+                kp.pt = pt;
+                f.keypoints.emplace_back(pt, 1.0f);
+            }
+            if (matched_last.size() < 20) {
+
+                RCLCPP_WARN(this->get_logger(), "光流追踪点对不足（%zu），无法进行特征点匹配", matched_last.size());
+                tmpf = extract_frame_orb(color_img, pc_msg);
+            } else {
+
+                tmpf = f;
+            }
+        }
+
+        // 点云解算
         // 获取点云的宽高信息
         int width = pc_msg->width;       // 点云的宽度（列数）
         int height = pc_msg->height;     // 点云的高度（行数）
@@ -132,10 +210,10 @@ namespace nav2_visual_processing {
         sensor_msgs::PointCloud2ConstIterator<float> iter_y(*pc_msg, "y");
         sensor_msgs::PointCloud2ConstIterator<float> iter_z(*pc_msg, "z");
 
-        f.points_3d.reserve(f.keypoints.size());
+        tmpf.points_3d.reserve(tmpf.keypoints.size());
 
         // 遍历每个检测到的特征点，建立2D-3D对应关系
-        for (const auto &kp : f.keypoints) {
+        for (const auto &kp : tmpf.keypoints) {
 
             // 将特征点的浮点坐标转换为整数坐标（四舍五入）
             int u = static_cast<int>(kp.pt.x + 0.5);
@@ -157,20 +235,27 @@ namespace nav2_visual_processing {
                 if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
 
                     // 有效3D点，转换为Eigen向量并添加到结果中
-                    f.points_3d.push_back(Eigen::Vector3d(x, y, z));
+                    tmpf.points_3d.push_back(Eigen::Vector3d(x, y, z));
                 } else {
 
                     // 深度无效，添加零向量占位（保持与特征点一一对应）
-                    f.points_3d.push_back(Eigen::Vector3d::Zero());
+                    tmpf.points_3d.push_back(Eigen::Vector3d::Zero());
                 }
             } else {
 
                 // 特征点坐标超出点云范围，添加零向量占位
-                f.points_3d.push_back(Eigen::Vector3d::Zero());
+                tmpf.points_3d.push_back(Eigen::Vector3d::Zero());
             }
         }
+        // 进行完一次orb提取，就进行光流追踪
+        is_lk_flow_ = true;
 
-        return f;
+        if (tmpf.kpts_2d.empty() && !tmpf.keypoints.empty()) {
+
+            cv::KeyPoint::convert(tmpf.keypoints, tmpf.kpts_2d);
+        }
+
+        return tmpf;
     }
 
     /**
@@ -244,12 +329,14 @@ namespace nav2_visual_processing {
         T.block<3, 3>(0, 0) = R;
         T.block<3, 1>(0, 3) = t;
 
+        /*
         // 可视化匹配结果
         cv::Mat match_img = visualize_matches(f1, f2, matches);
         
         // 可选：显示图像（调试用）
         cv::imshow("Feature Matches", match_img);
         cv::waitKey(1);
+        */
 
         return T;
     }
@@ -519,9 +606,7 @@ namespace nav2_visual_processing {
         // 获取最终变换矩阵
         Eigen::Matrix4f T_f = reg.getFinalTransformation();
 
-        // 发布tf
         auto T_d = T_f.cast<double>();
-        publish_tf(T_d, this->get_clock()->now());
 
         // 发布点云
         sensor_msgs::msg::PointCloud2 aligned_msg;
@@ -539,7 +624,12 @@ namespace nav2_visual_processing {
 int main(int argc, char **argv) {
 
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<nav2_visual_processing::VisualProcessorNode>();
+
+    // 使用仿真时间（Gazebo / sim time）时必须开启：
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("use_sim_time", true);
+
+    auto node = std::make_shared<nav2_visual_processing::VisualProcessorNode>(options);
 
     RCLCPP_INFO(node->get_logger(), "Visual Processor Node is spinning...");
     

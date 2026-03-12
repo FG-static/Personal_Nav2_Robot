@@ -68,8 +68,6 @@ struct Serializer<std::unordered_map<K, V>>
 #include <small_gicp/pcl/pcl_registration.hpp> // pcl结合使用
 #include <small_gicp/registration/registration.hpp> // 核心注册算法
 #include <small_gicp/factors/gicp_factor.hpp>
-// 导入头文件为点云计算协方差
-
 
 #include <vector>
 #include <array>
@@ -87,6 +85,8 @@ namespace nav2_visual_processing {
     struct Frame {
 
         cv::Mat color;
+        cv::Mat gray; // 灰度图
+        std::vector<cv::Point2f> kpts_2d; // 当前帧特征点坐标
         std::vector<cv::KeyPoint> keypoints;
         cv::Mat descriptors; // 描述子
         std::vector<Eigen::Vector3d> points_3d;
@@ -96,7 +96,7 @@ namespace nav2_visual_processing {
 
     public:
 
-        VisualProcessorNode();
+        explicit VisualProcessorNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
     private:
 
         // camera_link -> map
@@ -153,6 +153,10 @@ namespace nav2_visual_processing {
         );
         
         // 提取特征点
+        Frame extract_frame_orb(
+            const cv::Mat &color_img,
+            const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pc_msg
+        );
         Frame extract_frame(
             const cv::Mat &color_img,
             const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pc_msg
@@ -227,6 +231,15 @@ namespace nav2_visual_processing {
 
         // Recovery状态中用于位姿初始化的上一帧
         Frame recovery_reference_frame_;
+
+        // ==================== 光流跟踪 ====================
+        // LK光流
+        cv::Ptr<cv::SparsePyrLKOpticalFlow> lk_flow_;
+        cv::Mat prev_gray_img_; // 上一帧灰度图
+        std::vector<cv::KeyPoint> prev_keypoints_; // 上一帧特征点
+        std::vector<Eigen::Vector3d> prev_points_3d_; // 上一帧3D点
+        bool is_lk_flow_ = false; // 是否开启LK光流跟踪
+        int min_flow_points_ = 100; // 特征点少于这个数量则用orb重新匹配设置初始值
     };
 } // nav2_visual_processing
 
