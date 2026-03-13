@@ -72,6 +72,20 @@ namespace nav2_visual_processing {
 
         // 提取特征和3D点
         Frame cur_f = extract_frame(cv_ptr->image, pc_msg);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr raw_temp(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::fromROSMsg(*pc_msg, *raw_temp);
+
+        std::vector<int> indices;
+        pcl::removeNaNFromPointCloud(*raw_temp, *cur_f.raw_cloud, indices);
+
+        // 额外移除 Inf 点（pcl::removeNaNFromPointCloud 应该已经移除，但保险起见）
+        pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        for (const auto& point : cur_f.raw_cloud->points) {
+            if (pcl::isFinite(point)) {
+                filtered_cloud->points.push_back(point);
+            }
+        }
+        cur_f.raw_cloud = filtered_cloud;
 
         if (!is_first_f_) {
 
@@ -105,12 +119,14 @@ namespace nav2_visual_processing {
     }
 
     Frame VisualProcessorNode::extract_frame_orb(
-        const cv::Mat &color_img,
-        const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pc_msg
+        const cv::Mat &color_img
     ) {
 
         Frame f;
         f.color = color_img;
+
+        // 为光流法解算提供灰度图
+        cv::cvtColor(color_img, f.gray, cv::COLOR_BGR2GRAY);
 
         // 使用ORB算法检测图像中的特征点，并计算描述子-HammingCode
         // f.keypoints: 存储检测到的特征点位置
@@ -125,6 +141,77 @@ namespace nav2_visual_processing {
         }
 
         return f;
+    }
+
+    Frame VisualProcessorNode::extract_frame_flow(
+        const cv::Mat &color_img
+    ) {
+    
+        Frame f, tmpf;
+        f.color = color_img;
+
+        // 否则用光流法计算特征点位置
+        cv::cvtColor(color_img, f.gray, cv::COLOR_BGR2GRAY);
+
+        // 如果上一帧没图或者没点，直接退回 ORB 模式
+        if (last_f_.gray.empty() || last_f_.kpts_2d.empty()) {
+
+            RCLCPP_WARN(this->get_logger(), "上一帧灰度图或特征点为空，放弃光流，退回 ORB");
+            return extract_frame_orb(color_img); 
+        }
+        // 开始光流追踪
+        std::vector<cv::Point2f> next_kpts;
+        std::vector<uchar> status;
+        std::vector<float> err;
+        cv::calcOpticalFlowPyrLK(
+            last_f_.gray, f.gray,
+            last_f_.kpts_2d, next_kpts,
+            status, err,
+            cv::Size(21, 21), 3
+        );
+
+        f.keypoints.clear();
+
+        // 整理追踪成功点对
+        std::vector<cv::Point2f> matched_last, matched_curr;
+        std::vector<Eigen::Vector3d> matched_last_3d;
+        std::vector<cv::KeyPoint> matched_last_kpts;
+        for (size_t i = 0; i < status.size(); i ++) {
+
+            // 匹配成功且上一帧有对应3D点
+            if (status[i] && !last_f_.points_3d[i].isZero()) {
+
+                matched_curr.push_back(next_kpts[i]);
+                f.keypoints.emplace_back(next_kpts[i], 1.0f);
+
+                matched_last.push_back(last_f_.kpts_2d[i]);
+                matched_last_kpts.push_back(last_f_.keypoints[i]);
+                matched_last_3d.push_back(last_f_.points_3d[i]);
+            }
+        }
+        f.kpts_2d = matched_curr;
+
+        // 传给f的KeyPoint类型的keypoints变量
+        for (const auto &pt : f.kpts_2d) {
+
+            cv::KeyPoint kp;
+            kp.pt = pt;
+            f.keypoints.emplace_back(pt, 1.0f);
+        }
+        if (matched_last.size() < 20) {
+
+            RCLCPP_WARN(this->get_logger(), "光流追踪点对不足（%zu），无法进行特征点匹配", matched_last.size());
+            tmpf = extract_frame_orb(color_img);
+        } else {
+
+            tmpf = f;
+        }
+
+        last_f_.kpts_2d = matched_last;
+        last_f_.keypoints = matched_last_kpts;
+        last_f_.points_3d = matched_last_3d;
+
+        return tmpf;
     }
 
     /**
@@ -144,60 +231,10 @@ namespace nav2_visual_processing {
         // 如果未开启光流或需要精确计算特征点重新分配gicp初始值时，则用orb算法检测特征点并计算描述子
         if (!is_lk_flow_ || current_state_ == RECOVERY) {
 
-            tmpf = extract_frame_orb(color_img, pc_msg);
+            tmpf = extract_frame_orb(color_img);
         } else {
 
-            // 否则用光流法计算特征点位置
-            cv::cvtColor(color_img, f.gray, cv::COLOR_BGR2GRAY);
-
-            // 开始光流追踪
-            std::vector<cv::Point2f> next_kpts;
-            std::vector<uchar> status;
-            std::vector<float> err;
-            cv::calcOpticalFlowPyrLK(
-                last_f_.gray, f.gray,
-                last_f_.kpts_2d, next_kpts,
-                status, err,
-                cv::Size(21, 21), 3
-            );
-
-            f.keypoints.clear();
-
-            // 整理追踪成功点对
-            std::vector<cv::Point2f> matched_last, matched_curr, matched_last_3d, matched_last_kpts;
-            for (size_t i = 0; i < status.size(); i ++) {
-
-                // 匹配成功且上一帧有对应3D点
-                if (status[i] && !last_f_.points_3d[i].isZero()) {
-
-                    matched_curr.push_back(next_kpts[i]);
-                    f.keypoints.emplace_back(next_kpts[i], 1.0f);
-
-                    matched_last.push_back(last_f_.kpts_2d[i]);
-                    matched_last_kpts.push_back(last_f_.keypoints[i]);
-                    matched_last_3d.push_back(last_f_.points_3d[i]);
-                }
-            }
-            f.kpts_2d = matched_curr;
-            last_f_.kpts_2d = matched_last;
-            last_f_.keypoints = matched_last_kpts;
-            last_f_.points_3d = matched_last_3d;
-
-            // 传给f的KeyPoint类型的keypoints变量
-            for (const auto &pt : f.kpts_2d) {
-
-                cv::KeyPoint kp;
-                kp.pt = pt;
-                f.keypoints.emplace_back(pt, 1.0f);
-            }
-            if (matched_last.size() < 20) {
-
-                RCLCPP_WARN(this->get_logger(), "光流追踪点对不足（%zu），无法进行特征点匹配", matched_last.size());
-                tmpf = extract_frame_orb(color_img, pc_msg);
-            } else {
-
-                tmpf = f;
-            }
+            tmpf = extract_frame_flow(color_img);
         }
 
         // 点云解算
@@ -561,15 +598,29 @@ namespace nav2_visual_processing {
             voxel_filter.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
 
             pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered_target_ptr(new pcl::PointCloud<pcl::PointXYZ>);
-            voxel_filter.setInputCloud(cloud_target);
+            //voxel_filter.setInputCloud(cloud_target);
+            voxel_filter.setInputCloud(f2.raw_cloud);
             voxel_filter.filter(*cloud_filtered_target_ptr);
 
             pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered_source_ptr(new pcl::PointCloud<pcl::PointXYZ>);
-            voxel_filter.setInputCloud(cloud_source);
+            //voxel_filter.setInputCloud(cloud_source);
+            voxel_filter.setInputCloud(f1.raw_cloud);
             voxel_filter.filter(*cloud_filtered_source_ptr);
 
             cloud_filtered_target = cloud_filtered_target_ptr;
             cloud_filtered_source = cloud_filtered_source_ptr;
+
+            // 检查滤波后点云的有效性，并移除任何剩余无效点
+            pcl::PointCloud<pcl::PointXYZ>::Ptr clean_target(new pcl::PointCloud<pcl::PointXYZ>);
+            pcl::PointCloud<pcl::PointXYZ>::Ptr clean_source(new pcl::PointCloud<pcl::PointXYZ>);
+            for (const auto& p : cloud_filtered_target->points) {
+                if (pcl::isFinite(p)) clean_target->points.push_back(p);
+            }
+            for (const auto& p : cloud_filtered_source->points) {
+                if (pcl::isFinite(p)) clean_source->points.push_back(p);
+            }
+            cloud_filtered_target = clean_target;
+            cloud_filtered_source = clean_source;
         } else {
 
             cloud_filtered_target = cloud_target;
@@ -590,8 +641,9 @@ namespace nav2_visual_processing {
 
         auto aligned = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
 
-        // 设置初始值
-        Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
+        // 设置初始值（使用上一次估计的位姿作为初始猜测，可提高收敛性）
+        Eigen::Matrix4f init_guess = initial_pose_for_gicp_.cast<float>();
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "GICP 开始对齐: target_pts=%zu, source_pts=%zu", cloud_filtered_target->size(), cloud_filtered_source->size());
         reg.align(*aligned, init_guess); // 开始对齐迭代
 
         // 获取结果

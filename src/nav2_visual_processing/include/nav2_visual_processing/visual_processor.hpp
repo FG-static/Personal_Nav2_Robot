@@ -90,6 +90,10 @@ namespace nav2_visual_processing {
         std::vector<cv::KeyPoint> keypoints;
         cv::Mat descriptors; // 描述子
         std::vector<Eigen::Vector3d> points_3d;
+        // 原始点云
+        pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud; 
+    
+        Frame() : raw_cloud(new pcl::PointCloud<pcl::PointXYZ>()) {}
     };
 
     class VisualProcessorNode : public rclcpp::Node {
@@ -154,8 +158,10 @@ namespace nav2_visual_processing {
         
         // 提取特征点
         Frame extract_frame_orb(
-            const cv::Mat &color_img,
-            const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pc_msg
+            const cv::Mat &color_img
+        );
+        Frame extract_frame_flow(
+            const cv::Mat &color_img
         );
         Frame extract_frame(
             const cv::Mat &color_img,
@@ -203,8 +209,8 @@ namespace nav2_visual_processing {
 
         // ==================== GICP相关变量（Tracking状态） ====================
         // 开启滤波器
-        bool enable_voxel_filter_ = false;
-        double voxel_leaf_size_ = 0.01; // 滤波器的分辨率
+        bool enable_voxel_filter_ = true;
+        double voxel_leaf_size_ = 0.05; // 滤波器的分辨率
 
         // GICP对齐分数的阈值以及显著运动阈值（用于判断是否需要切换状态）
         double 

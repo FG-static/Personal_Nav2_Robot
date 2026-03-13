@@ -224,27 +224,19 @@
 
     <gazebo reference="front_left_wheel_link">
         <mu1>1.5</mu1> 
-        <mu2>1.5</mu2> 
-        <kp>1000000.0</kp> 
-        <kd>1.0</kd>      
+        <mu2>1.5</mu2>     
     </gazebo>
     <gazebo reference="front_right_wheel_link">
         <mu1>1.5</mu1>
         <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
     </gazebo>
     <gazebo reference="rear_left_wheel_link">
         <mu1>1.5</mu1>
         <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
     </gazebo>
     <gazebo reference="rear_right_wheel_link">
         <mu1>1.5</mu1>
         <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
     </gazebo>
 
     <gazebo>
@@ -256,9 +248,9 @@
             <left_joint>rear_left_wheel_joint</left_joint> 
             <right_joint>rear_right_wheel_joint</right_joint>
 
-            <wheel_separation>0.522</wheel_separation>
+            <wheel_separation>0.52</wheel_separation>
             <wheel_radius>${wheel_radius}</wheel_radius>
-            <max_wheel_torque>20</max_wheel_torque>
+            <max_wheel_torque>50</max_wheel_torque>
             <max_wheel_acceleration>3.5</max_wheel_acceleration>
 
             <topic>cmd_vel</topic>
