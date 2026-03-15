@@ -41,17 +41,18 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=['/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist', # 最好是这样
-                   '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
+                   #'/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry', # 轮式里程计
                    '/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
                    '/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image',
                    '/camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo',
                    '/depth_camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked',
                    '/depth_camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
                    '/depth_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+                   '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
                    '/tf@tf2_msgs/msg/TFMessage@gz.msgs.Pose_V',
                    '/joint_states@sensor_msgs/msg/JointState@gz.msgs.Model',
                    '/scan/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked',
-                   '/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry', # 这个可能也要单向
+                   '/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry', # 绝对真实里程计
                    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'], # 这个确实要单向
         parameters=[{'use_sim_time': True}],
         output='screen'

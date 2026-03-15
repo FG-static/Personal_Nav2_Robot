@@ -167,6 +167,25 @@
         <origin xyz="0.2 0 ${chassis_height + laser_height / 2 - 0.06}" rpy="0 0 0"/>
     </joint>
 
+    <!--imu-->
+    <link name = "imu_link">
+        <visual>
+            <geometry>
+                <box size = "0.02 0.02 0.02"/>
+            </geometry>
+            <material name = "black"/>
+        </visual>
+        <xacro:inertial_box mass="0.01" l="0.02" w="0.02" h="0.02">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_box>
+    </link>
+
+    <joint name = "imu_joint" type = "fixed">
+        <parent link = "base_link"/>
+        <child link = "imu_link"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
     <!--雷达插件-->
     <gazebo reference="laser_link">
         <sensor name="gpu_lidar" type="gpu_lidar">
@@ -197,7 +216,7 @@
     <gazebo reference="camera_link">
         <sensor name="depth_camera" type="rgbd_camera">
             <visualize>true</visualize>
-            <update_rate>10.0</update_rate>
+            <update_rate>1.0</update_rate> <!-- 原10hz，到时候再改回来 -->
             <topic>depth_camera</topic>
             <gz_frame_id>camera_link</gz_frame_id>
             <camera>
@@ -215,11 +234,21 @@
         </sensor>
     </gazebo>
 
+    <!--imu插件-->
+    <gazebo reference="imu_link">
+        <sensor name="imu" type="imu">
+            <update_rate>1.0</update_rate> <!-- 原100hz，到时候再改回来 -->
+            <topic>imu</topic>
+            <gz_frame_id>imu_link</gz_frame_id>
+        </sensor>
+    </gazebo>
+
     <!--全局挂载插件-->
     <gazebo>
         <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
             <render_engine>ogre2</render_engine>
         </plugin>
+        <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     </gazebo>
 
     <gazebo reference="front_left_wheel_link">
@@ -248,21 +277,16 @@
             <left_joint>rear_left_wheel_joint</left_joint> 
             <right_joint>rear_right_wheel_joint</right_joint>
 
-            <wheel_separation>0.52</wheel_separation>
+            <wheel_separation>0.34</wheel_separation>
             <wheel_radius>${wheel_radius}</wheel_radius>
-            <max_wheel_torque>50</max_wheel_torque>
+            <max_wheel_torque>50</max_wheel_torque> 
             <max_wheel_acceleration>3.5</max_wheel_acceleration>
 
             <topic>cmd_vel</topic>
             <odom_topic>odom</odom_topic>
-            <tf_topic>/tf</tf_topic> <!--重要-->
+            <tf_topic>/wheel_tf</tf_topic> <!--可以不开，专门给轮式里程计的，不写tf是为了防止跟轮式里程计抢发布-->
             <frame_id>odom</frame_id>
             <child_frame_id>base_footprint</child_frame_id>
-            <publish_odom>true</publish_odom>
-            <publish_odom_tf>false</publish_odom_tf>
-            <publish_wheel_tf>true</publish_wheel_tf>
-            <odometry_frame>odom</odometry_frame>
-            <use_gz_time>true</use_gz_time>
         </plugin>
 
         <plugin
@@ -275,9 +299,10 @@
         <plugin
             filename="gz-sim-odometry-publisher-system"
             name="gz::sim::systems::OdometryPublisher">
-            <odom_topic>ground_truth</odom_topic> <odom_frame>world</odom_frame>
+            <odom_topic>ground_truth</odom_topic>  <!--里程计请用此话题！！！-->
+            <odom_frame>odom</odom_frame>
             <robot_base_frame>base_footprint</robot_base_frame>
-            <tf_topic>ground_truth/tf</tf_topic>
+            <tf_topic>/tf</tf_topic>
             <dimensions>3</dimensions>
         </plugin>
     </gazebo>

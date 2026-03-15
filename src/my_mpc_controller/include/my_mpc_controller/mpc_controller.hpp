@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <Eigen/Dense>
+#include <Eigen/Sparse>
 
 #include "nav2_core/controller.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -29,7 +30,7 @@ namespace my_mpc_controller {
         Eigen::VectorXd f; // 一次项向量
         double G; // 常数项
     };
-    class MyMPCController : public nav2_core::Controller {
+    class MyMPCController : public nav2_core::Controller{
 
     public:
 
@@ -106,11 +107,16 @@ namespace my_mpc_controller {
         std::string plugin_name_;
         std::vector<PathPoint> processed_path_;
         int last_closest_index_ = 0; // 优化路径寻找
+        // 发布给foxglove数据可视化
+        rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr mpc_debug_pub_;
 
         // MPC参数
         int N_ = 10; // 预测区间
         double dt_ = 0.1; // 采样时间 - 动态
         rclcpp::Duration transform_tolerance_{0, 0};
+        double 
+            max_v_ = 2.0, // 最大线速度
+            max_w_ = 1.0; // 最大角速度
         double // 方便传数据
             q_11 = 30.0, // x
             q_22 = 30.0, // y

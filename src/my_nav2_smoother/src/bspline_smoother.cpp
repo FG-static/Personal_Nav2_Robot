@@ -117,21 +117,21 @@ namespace my_bspline_smoother {
                     triplets.push_back(Eigen::Triplet<double>(i + r, i + c, w_s * Q_data[r][c]));
                 }
             }
-        }
+        } // w_s H_s
 
         // 引导项
         for (int i = 0; i < n; ++ i) {
 
             triplets.push_back(Eigen::Triplet<double>(i, i, w_g));
-        }
-        H.setFromTriplets(triplets.begin(), triplets.end());
+        } // w_g I
+        H.setFromTriplets(triplets.begin(), triplets.end()); // H_{QP}
 
         Eigen::VectorXd f_x(n), f_y(n);
         for (int i = 0; i < n; ++ i) {
             
             f_x(i) = -w_g * p_ref_x[i];
             f_y(i) = -w_g * p_ref_y[i];
-        }
+        } // f_{QP}
 
         // 边界约束
         Eigen::VectorXd l_x(n), u_x(n), l_y(n), u_y(n);
@@ -214,7 +214,7 @@ namespace my_bspline_smoother {
             }
         } else {
 
-            RCLCPP_INFO(node_->get_logger(), "OSQP初始化失败");
+            RCLCPP_INFO(node_->get_logger(), "B-Spline: OSQP初始化失败");
         }
 
         // 释放

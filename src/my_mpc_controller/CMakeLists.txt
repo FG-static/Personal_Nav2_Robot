@@ -19,6 +19,8 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(angles REQUIRED)
+find_package(osqp REQUIRED)
+find_package(osqp_vendor REQUIRED)
 
 # 添加头文件目录
 include_directories(include)
@@ -41,6 +43,11 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   tf2_ros
   Eigen3
   angles
+  osqp
+)
+
+target_link_libraries(${PROJECT_NAME}_lib
+  osqp::osqp
 )
 
 pluginlib_export_plugin_description_file(nav2_core plugins.xml)

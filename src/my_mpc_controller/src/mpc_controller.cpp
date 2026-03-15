@@ -3,6 +3,10 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
+extern "C" {
+#include "osqp/osqp.h"
+}
+
 using nav2_util::declare_parameter_if_not_declared;
 
 namespace my_mpc_controller {
@@ -45,6 +49,14 @@ namespace my_mpc_controller {
             node, plugin_name_ + ".f_33", rclcpp::ParameterValue(60.0));
         node->get_parameter(plugin_name_ + ".f_33", f_33);
 
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".v_max", rclcpp::ParameterValue(2.0));
+        node->get_parameter(plugin_name_ + ".v_max", max_v_);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".w_max", rclcpp::ParameterValue(1.0));
+        node->get_parameter(plugin_name_ + ".w_max", max_w_);
+
+
         Q_.setIdentity(); 
         Q_(0, 0) = q_11; // x 权重
         Q_(1, 1) = q_22; // y 权重
@@ -67,6 +79,9 @@ namespace my_mpc_controller {
         node->get_parameter(plugin_name_ + ".transform_tolerance", transform_tolerance);
         transform_tolerance_ = rclcpp::Duration::from_seconds(transform_tolerance);
 
+        // 调试用
+        mpc_debug_pub_ = node->create_publisher<geometry_msgs::msg::TwistStamped>("/mpc_debug/u", 1);
+            
         RCLCPP_INFO(logger_, "自定义MPC控制器配置完成");
     }
      
@@ -301,7 +316,7 @@ namespace my_mpc_controller {
         MPCmatrices mpcm_out;
         Eigen::VectorXd E = M * x_k - X_ref;
         mpcm_out.H = C.transpose() * Q_bar * C + R_bar;
-        mpcm_out.f = C.transpose() * Q_bar * E;
+        mpcm_out.f = 2.0 * C.transpose() * Q_bar * E;
         mpcm_out.G = E.transpose() * Q_bar * E;
 
         return mpcm_out;
@@ -340,13 +355,92 @@ namespace my_mpc_controller {
         MPCmatrices mpcm = replaceLargeMatrix(A, B, x_k, X_ref, Q_, R_, F_, N_);
 
         // 求解U
+        Eigen::SparseMatrix<double> H_sparse = 2.0 * mpcm.H.sparseView();
+        int n = mpcm.f.rows();
+        Eigen::VectorXd l(n), u(n);
         Eigen::VectorXd U_sol;
-        U_sol = (mpcm.H + 1e-6 * Eigen::MatrixXd::Identity(mpcm.H.rows(), mpcm.H.cols())).ldlt().solve(-mpcm.f); // LM方法
-        // TODO：有机会可用osqp求约束解
+        for (int i = 0; i < n / 2; ++i) {
+
+            l(2 * i) = -0.1;
+            u(2 * i) = max_v_;
+            l(2 * i + 1) = -max_w_;
+            u(2 * i + 1) = max_w_;
+        }
+
+        // OSQP 求约束解
+        // ====================================
+        OSQPSettings *settings = (OSQPSettings*)c_malloc(sizeof(OSQPSettings));
+        OSQPData *data = (OSQPData*)c_malloc(sizeof(OSQPData));
+        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> H_csc = H_sparse.triangularView<Eigen::Upper>(); // csc形式
+        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> A_csc(n, n);
+        A_csc.setIdentity();
+        A_csc.makeCompressed();
+        H_csc.makeCompressed();
+
+        data->n = n; // 变量
+        data->m = n; // 约束
+        data->P = csc_matrix( // csc矩阵信息
+            n, n,
+            H_csc.nonZeros(),
+            H_csc.valuePtr(),
+            (c_int*)H_csc.innerIndexPtr(),
+            (c_int*)H_csc.outerIndexPtr()
+        );
+        data->q = mpcm.f.data(); // 一次项
+        data->A = csc_matrix( // 约束矩阵
+            n, n, 
+            A_csc.nonZeros(),
+            A_csc.valuePtr(),
+            (c_int*)A_csc.innerIndexPtr(),
+            (c_int*)A_csc.outerIndexPtr()
+        );
+
+        // 约束向量
+        data->l = l.data();
+        data->u = u.data();
+
+        // 开始求解
+        osqp_set_default_settings(settings);
+        settings->warm_start = 1;
+        settings->verbose = 0; // 生产环境关闭日志
+
+        OSQPWorkspace *work = nullptr;
+        c_int status = osqp_setup(&work, data, settings);
+        if (status == 0 && work) {
+
+            osqp_solve(work);
+            if (work->info->status_val >= 0 && work->solution) {
+
+                U_sol.resize(n);
+                for (int i = 0; i < n / 2; ++ i) {
+
+                    U_sol[i * 2] = work->solution->x[i * 2];
+                    U_sol[i * 2 + 1] = work->solution->x[i * 2 + 1];
+                }
+            }
+        } else {
+
+            RCLCPP_INFO(logger_, "MPC: OSQP初始化失败");
+        }
+
+        // 释放
+        if (work) osqp_cleanup(work);
+        if (data) {
+
+            if (data->P) c_free(data->P);
+            if (data->A) c_free(data->A);
+            c_free(data);
+        }
+        if (settings) c_free(settings);
+        // =============================================
 
         double
             v_cmd = U_sol(0),
             w_cmd = U_sol(1);
+
+        // 限速
+        v_cmd = std::clamp(v_cmd, -max_v_, max_v_);
+        w_cmd = std::clamp(w_cmd, -max_w_, max_w_);
 
         // 封装
         geometry_msgs::msg::TwistStamped cmd_vel;
@@ -354,6 +448,10 @@ namespace my_mpc_controller {
         cmd_vel.header.frame_id = "base_link";
         cmd_vel.twist.linear.x = v_cmd;
         cmd_vel.twist.angular.z = w_cmd;
+
+        // 发布调试信息至foxglove
+        mpc_debug_pub_->publish(cmd_vel);
+
         return cmd_vel;
     }
     void MyMPCController::activate() { RCLCPP_INFO(logger_, "插件已激活"); }

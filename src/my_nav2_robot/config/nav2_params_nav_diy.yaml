@@ -45,7 +45,7 @@ bt_navigator:
     use_sim_time: True
     global_frame: map
     robot_base_frame: base_footprint
-    odom_topic: /odom
+    odom_topic: /ground_truth
     bt_loop_duration: 10
     default_server_timeout: 20
     wait_for_service_timeout: 1000
@@ -97,7 +97,7 @@ controller_server:
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
     controller_plugins: ["FollowPath"]
-    odom_topic: /odom
+    odom_topic: /ground_truth
     use_realtime_priority: false
     enable_stamped_cmd_vel: false
 
@@ -120,14 +120,21 @@ controller_server:
     FollowPath:
       plugin: "my_mpc_controller/MyMPCController"
       n: 10
-      q_11: 30.0
-      q_22: 30.0
-      q_33: 15.0
-      r_11: 0.1
-      r_22: 1.0
-      f_11: 60.0
-      f_22: 60.0
-      f_33: 30.0
+      # 状态权重
+      q_11: 70.0 # x
+      q_22: 70.0 # y
+      q_33: 100.0 # a
+      # 控制权重
+      r_11: 0.4  # v
+      r_22: 0.3  # w
+      # 终端权重
+      f_11: 80.0 # x
+      f_22: 80.0 # y
+      f_33: 110.0 # a
+      # 最大速度
+      v_max: 2.0
+      # 最大加速度
+      a_max: 1.5
       transform_tolerance: 0.1
       goal_checker_plugin: "general_goal_checker"
       progress_checker_plugin: "progress_checker"
@@ -318,7 +325,7 @@ velocity_smoother:
     min_velocity: [-0.5, 0.0, -2.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
-    odom_topic: "/odom"
+    odom_topic: "/ground_truth"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
