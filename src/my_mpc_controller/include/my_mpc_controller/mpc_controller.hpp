@@ -79,9 +79,8 @@ namespace my_mpc_controller {
         // 线性化
         void updateDiscreteModel(
             Eigen::Matrix3d &A, 
-            Eigen::Matrix<double, 3, 2> &B,
+            Eigen::Matrix3d &B,
             const double theta,
-            const double v,
             const double dt);
 
         Eigen::VectorXd sampleReferencePath(
@@ -122,14 +121,15 @@ namespace my_mpc_controller {
             q_22 = 30.0, // y
             q_33 = 30.0; // theta
         double
-            r_11 = 0.1, // v
-            r_22 = 0.25; // w
+            r_11 = 0.1, // v_x
+            r_22 = 0.1, // v_y
+            r_33 = 0.25; // w
         double
             f_11 = 40.0, // x
             f_22 = 40.0, // y
             f_33 = 40.0; // theta
         Eigen::Matrix3d Q_; // 状态权重矩阵
-        Eigen::Matrix2d R_; // 控制权重矩阵
+        Eigen::Matrix3d R_; // 控制权重矩阵
         Eigen::Matrix3d F_; // 终端控制矩阵
     };
 }

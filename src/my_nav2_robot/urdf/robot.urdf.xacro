@@ -8,7 +8,7 @@
 
     <!--轮子形态-->
     <xacro:property name="wheel_radius" value="0.05"/>
-    <xacro:property name="wheel_width" value="0.04"/>
+    <xacro:property name="wheel_width" value="0.025"/>
 
     <!--轮子位置-->
     <xacro:property name="wheel_offset_x" value="${chassis_length / 2 - 0.05}"/>
@@ -95,22 +95,22 @@
         
         <link name="${prefix}_wheel_link">
             <visual>
-                <!--roll需要为pi/2的原因是圆柱体默认朝z轴向上-->
-                <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+                <!--roll需要为pi/2的原因是圆柱体默认朝z轴向上，额这是之前的圆柱体代码，换成麦轮就不一样了-->
+                <origin xyz="0 0 -0.05" rpy="0 0 0"/>
                 <geometry>
                     <!--圆柱体-->
-                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                    <mesh filename="package://my_nav2_robot/meshes/mecanum_${prefix}_hands.stl" scale="0.001 0.001 0.001"/>
                 </geometry>
                 <material name="black"/>
             </visual>
             <collision>
-                <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+                <origin xyz="0 0 -0.05" rpy="0 0 0"/>
                 <geometry>
-                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                    <mesh filename="package://my_nav2_robot/meshes/mecanum_${prefix}_hands.stl" scale="0.001 0.001 0.001"/>
                 </geometry>
             </collision>
             <xacro:inertial_cylinder mass="0.5" r="${wheel_radius}" h="${wheel_width}">
-                <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+                <origin xyz="0 0 -0.05" rpy="0 0 0"/>
             </xacro:inertial_cylinder>
         </link>
 
@@ -120,7 +120,20 @@
             <origin xyz="${reflect_x * wheel_offset_x} ${reflect_y * wheel_offset_y} ${wheel_offset_z}" rpy="0 0 0"/>
             <!--旋转轴-->
             <axis xyz="0 1 0"/>
+            <limit effort="50" velocity="50"/>
+            <dynamics damping="0.0" friction="0.05"/>
         </joint>
+
+        <gazebo reference="${prefix}_wheel_link">
+            <mu1>2.0</mu1> 
+            <mu2>0.5</mu2>     
+            <kp>1000000.0</kp>
+            <kd>1.0</kd>
+            <fdir1>1 0 0</fdir1>
+            <minDepth>0.001</minDepth>
+
+            <material>Gazebo/Black</material>
+        </gazebo>
     </xacro:macro>
 
     <xacro:wheel prefix="front_left" reflect_x="1" reflect_y="1"/>
@@ -251,24 +264,8 @@
         <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     </gazebo>
 
-    <gazebo reference="front_left_wheel_link">
-        <mu1>1.5</mu1> 
-        <mu2>1.5</mu2>     
-    </gazebo>
-    <gazebo reference="front_right_wheel_link">
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-    </gazebo>
-    <gazebo reference="rear_left_wheel_link">
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-    </gazebo>
-    <gazebo reference="rear_right_wheel_link">
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-    </gazebo>
-
-    <gazebo>
+    <!-- 差速驱动插件 -->
+    <!-- <gazebo>
         <plugin
             filename="gz-sim-diff-drive-system"
             name="gz::sim::systems::DiffDrive">
@@ -284,7 +281,7 @@
 
             <topic>cmd_vel</topic>
             <odom_topic>odom</odom_topic>
-            <tf_topic>/wheel_tf</tf_topic> <!--可以不开，专门给轮式里程计的，不写tf是为了防止跟轮式里程计抢发布-->
+            <tf_topic>/wheel_tf</tf_topic>
             <frame_id>odom</frame_id>
             <child_frame_id>base_footprint</child_frame_id>
         </plugin>
@@ -294,12 +291,55 @@
             name="gz::sim::systems::JointStatePublisher">
             <topic>joint_states</topic>
         </plugin>
+    </gazebo> -->
+
+    <!-- 麦克纳姆轮（何用？） -->
+    <!-- <gazebo>
+        <plugin
+            filename = "gz-sim-mecanum-drive-system"
+            name = "gz::sim::systems::MecanumDrive">
+            <front_left_joint>front_left_wheel_joint</front_left_joint> 
+            <front_right_joint>front_right_wheel_joint</front_right_joint>
+            <back_left_joint>rear_left_wheel_joint</back_left_joint> 
+            <back_right_joint>rear_right_wheel_joint</back_right_joint>
+
+            <wheel_separation>${chassis_width + wheel_width}</wheel_separation>
+            <wheel_radius>${wheel_radius}</wheel_radius>
+            <wheel_base>${2 * wheel_offset_y}</wheel_base>
+
+            <topic>/cmd_vel</topic>
+            <odom_topic>/odom</odom_topic>
+            <tf_topic>/wheel_tf</tf_topic>
+            <frame_id>odom</frame_id>
+            <child_frame_id>base_footprint</child_frame_id>
+        </plugin>
+
+        <plugin
+            filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+            <topic>/joint_states</topic>
+        </plugin>
+    </gazebo> -->
+
+    <!-- 代替麦克纳姆轮的直接移动插件 -->
+    <gazebo>
+        <plugin
+            filename = "gz-sim-velocity-control-system"
+            name = "gz::sim::systems::VelocityControl">
+            <topic>/cmd_vel</topic>
+        </plugin>
+        <plugin
+            filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+            <topic>/joint_states</topic>
+        </plugin>
     </gazebo>
+
     <gazebo>
         <plugin
             filename="gz-sim-odometry-publisher-system"
             name="gz::sim::systems::OdometryPublisher">
-            <odom_topic>ground_truth</odom_topic>  <!--里程计请用此话题！！！-->
+            <odom_topic>/ground_truth</odom_topic>  <!--里程计请用此话题！！！-->
             <odom_frame>odom</odom_frame>
             <robot_base_frame>base_footprint</robot_base_frame>
             <tf_topic>/tf</tf_topic>

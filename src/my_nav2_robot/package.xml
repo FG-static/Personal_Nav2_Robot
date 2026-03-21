@@ -23,5 +23,6 @@
   <export>
     <build_type>ament_cmake</build_type>
     <nav2_core plugin="${prefix}/plugins.xml" />
+    <ament_index_cmake auto_executable="true" />
   </export>
 </package>

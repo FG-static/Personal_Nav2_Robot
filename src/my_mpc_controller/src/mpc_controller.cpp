@@ -37,8 +37,11 @@ namespace my_mpc_controller {
             node, plugin_name_ + ".r_11", rclcpp::ParameterValue(0.1));
         node->get_parameter(plugin_name_ + ".r_11", r_11);
         nav2_util::declare_parameter_if_not_declared(
-            node, plugin_name_ + ".r_22", rclcpp::ParameterValue(0.5));
+            node, plugin_name_ + ".r_22", rclcpp::ParameterValue(0.1));
         node->get_parameter(plugin_name_ + ".r_22", r_22);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".r_33", rclcpp::ParameterValue(0.5));
+        node->get_parameter(plugin_name_ + ".r_33", r_33);
         nav2_util::declare_parameter_if_not_declared(
             node, plugin_name_ + ".f_11", rclcpp::ParameterValue(60.0));
         node->get_parameter(plugin_name_ + ".f_11", f_11);
@@ -63,8 +66,9 @@ namespace my_mpc_controller {
         Q_(2, 2) = q_33;  // theta 权重
 
         R_.setIdentity();
-        R_(0, 0) = r_11; // v 权重
-        R_(1, 1) = r_22; // w 权重
+        R_(0, 0) = r_11; // v_x 权重
+        R_(1, 1) = r_22; // v_y 权重
+        R_(2, 2) = r_33; // w 权重
 
         F_.setIdentity(); 
         F_(0, 0) = f_11;
@@ -216,6 +220,9 @@ namespace my_mpc_controller {
                 ref_point = interpolatePathByS(global_path, s_target, min_idx);
             }
 
+            // 麦克纳姆轮应不涉及旋转的权重
+            ref_point(2) = cur_pose(2);
+
             // 填充到Xk
             x_ref_vec.segment<3>((i - 1) * 3) = ref_point;
         }
@@ -225,29 +232,29 @@ namespace my_mpc_controller {
 
     void MyMPCController::updateDiscreteModel(
         Eigen::Matrix3d &A, 
-        Eigen::Matrix<double, 3, 2> &B,
+        Eigen::Matrix3d &B,
         const double theta,
-        const double v,
         const double dt
     ) {
 
         /*
-            x_{k+1} = x_k + v_k \cos\theta_k \cdot \Delta t
-            y_{k+1} = y_k + v_k \sin\theta_k \cdot \Delta t
+            x_{k+1} = x_k + ( v_xk * \cos\theta_k - v_yk * \sin\theta_k ) \cdot \Delta t
+            y_{k+1} = y_k + ( v_xk \sin\theta_k + v_yk * \cos\theta_k ) \cdot \Delta t
             \theta_{k+1} = \theta_k + \omega_k \cdot \Delta t
-            A = [1 0 -v \sin\theta \Delta t]
-                [0 1 v \cos\theta \Delta t ]
-                [0 0 1                     ]
-            B = [\cos\theta \Delta t 0       ]
-                [\sin\theta \Delta t 0       ]
-                [0                   \Delta t]
+            A = [1 0 0]
+                [0 1 0]
+                [0 0 1]
+            B = [\cos\theta * \Delta t -\sin\theta * \Delta t 0       ]
+                [\sin\theta * \Delta t  \cos\theta * \Delta t 0       ]
+                [0                     0                      \Delta t]
         */
-        A << 1.0, 0.0, -v * sin(theta) * dt,
-             0.0, 1.0,  v * cos(theta) * dt,
-             0.0, 0.0,                  1.0;
-        B << cos(theta) * dt, 0.0,
-             sin(theta) * dt, 0.0,
-             0.0,              dt;
+        A.setIdentity();
+        // A << 1.0, 0.0, -v * sin(theta) * dt,
+        //      0.0, 1.0,  v * cos(theta) * dt,
+        //      0.0, 0.0,                  1.0;
+        B << cos(theta) * dt, -sin(theta) * dt, 0.0,
+             sin(theta) * dt,  cos(theta) * dt, 0.0,
+             0.0,                          0.0,  dt;
     }
     
     /**
@@ -260,18 +267,18 @@ namespace my_mpc_controller {
      */
     MPCmatrices replaceLargeMatrix(
         const Eigen::Matrix3d &A, 
-        const Eigen::Matrix<double, 3, 2> &B,
+        const Eigen::Matrix3d &B,
         const Eigen::Vector3d &x_k,
         const Eigen::VectorXd &X_ref,
         const Eigen::Matrix3d &Q,
-        const Eigen::Matrix2d &R,
+        const Eigen::Matrix3d &R,
         const Eigen::Matrix3d &F,
         int N
     ) {
 
         const int
             state_dim = 3,
-            control_dim = 2;
+            control_dim = 3;
 
         // 构建 M
         Eigen::MatrixXd M = Eigen::MatrixXd::Zero((N + 1) * state_dim, state_dim);
@@ -293,7 +300,7 @@ namespace my_mpc_controller {
 
                     A_pow *= A;
                 }
-                C.block<3, 2>(i * state_dim, j * control_dim) = A_pow * B;
+                C.block<3, 3>(i * state_dim, j * control_dim) = A_pow * B;
             }
         }
 
@@ -309,7 +316,7 @@ namespace my_mpc_controller {
         Eigen::MatrixXd R_bar = Eigen::MatrixXd::Zero(N * control_dim, N * control_dim);
         for (int i = 0; i <= N - 1; ++ i) {
 
-            R_bar.block<2, 2>(i * control_dim, i * control_dim) = R;
+            R_bar.block<3, 3>(i * control_dim, i * control_dim) = R;
         }
 
         // 输出
@@ -348,8 +355,8 @@ namespace my_mpc_controller {
 
         // 线性化AB
         Eigen::Matrix3d A;
-        Eigen::Matrix<double, 3, 2> B;
-        updateDiscreteModel(A, B, theta, std::max(std::abs(velocity.linear.x), 0.1), dt); // 暂时先这样
+        Eigen::Matrix3d B;
+        updateDiscreteModel(A, B, theta, dt); // 暂时先这样
         
         // 构建HfG
         MPCmatrices mpcm = replaceLargeMatrix(A, B, x_k, X_ref, Q_, R_, F_, N_);
@@ -358,13 +365,15 @@ namespace my_mpc_controller {
         Eigen::SparseMatrix<double> H_sparse = 2.0 * mpcm.H.sparseView();
         int n = mpcm.f.rows();
         Eigen::VectorXd l(n), u(n);
-        Eigen::VectorXd U_sol;
-        for (int i = 0; i < n / 2; ++i) {
+        Eigen::VectorXd U_sol = Eigen::VectorXd::Zero(n);
+        for (int i = 0; i < n / 3; ++i) {
 
-            l(2 * i) = -0.1;
-            u(2 * i) = max_v_;
-            l(2 * i + 1) = -max_w_;
-            u(2 * i + 1) = max_w_;
+            l(3 * i) = -max_v_; // v_x
+            u(3 * i) = max_v_;
+            l(3 * i + 1) = -max_v_; // v_y
+            u(3 * i + 1) = max_v_;
+            l(3 * i + 2) = -max_w_; // w
+            u(3 * i + 2) = max_w_;
         }
 
         // OSQP 求约束解
@@ -412,10 +421,11 @@ namespace my_mpc_controller {
             if (work->info->status_val >= 0 && work->solution) {
 
                 U_sol.resize(n);
-                for (int i = 0; i < n / 2; ++ i) {
+                for (int i = 0; i < n / 3; ++ i) {
 
-                    U_sol[i * 2] = work->solution->x[i * 2];
-                    U_sol[i * 2 + 1] = work->solution->x[i * 2 + 1];
+                    U_sol[i * 3] = work->solution->x[i * 3];
+                    U_sol[i * 3 + 1] = work->solution->x[i * 3 + 1];
+                    U_sol[i * 3 + 2] = work->solution->x[i * 3 + 2];
                 }
             }
         } else {
@@ -435,18 +445,21 @@ namespace my_mpc_controller {
         // =============================================
 
         double
-            v_cmd = U_sol(0),
-            w_cmd = U_sol(1);
+            v_xcmd = U_sol(0),
+            v_ycmd = U_sol(1),
+            w_cmd = U_sol(2);
 
         // 限速
-        v_cmd = std::clamp(v_cmd, -max_v_, max_v_);
+        v_xcmd = std::clamp(v_xcmd, -max_v_, max_v_);
+        v_ycmd = std::clamp(v_ycmd, -max_v_, max_v_);
         w_cmd = std::clamp(w_cmd, -max_w_, max_w_);
 
         // 封装
         geometry_msgs::msg::TwistStamped cmd_vel;
         cmd_vel.header.stamp = clock_->now();
         cmd_vel.header.frame_id = "base_link";
-        cmd_vel.twist.linear.x = v_cmd;
+        cmd_vel.twist.linear.x = v_xcmd;
+        cmd_vel.twist.linear.y = v_ycmd;
         cmd_vel.twist.angular.z = w_cmd;
 
         // 发布调试信息至foxglove
