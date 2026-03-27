@@ -97,6 +97,8 @@ namespace my_mpc_controller {
          */
         std::vector<PathPoint> preprocessPath(const nav_msgs::msg::Path &path);
 
+        void publish_trajectory_msg(const Eigen::VectorXd &X_ref);
+
         rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
         std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
         std::shared_ptr<tf2_ros::Buffer> tf_;
@@ -108,6 +110,8 @@ namespace my_mpc_controller {
         int last_closest_index_ = 0; // 优化路径寻找
         // 发布给foxglove数据可视化
         rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr mpc_debug_pub_;
+        // 发布参考路径可视化
+        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr ref_path_pub_;
 
         // MPC参数
         int N_ = 10; // 预测区间
@@ -115,7 +119,9 @@ namespace my_mpc_controller {
         rclcpp::Duration transform_tolerance_{0, 0};
         double 
             max_v_ = 2.0, // 最大线速度
-            max_w_ = 1.0; // 最大角速度
+            max_w_ = 1.0, // 最大角速度
+            max_a_v_ = 1.5, // 最大线加速度
+            max_a_w_ = 1.0; // 最大角加速度
         double // 方便传数据
             q_11 = 30.0, // x
             q_22 = 30.0, // y

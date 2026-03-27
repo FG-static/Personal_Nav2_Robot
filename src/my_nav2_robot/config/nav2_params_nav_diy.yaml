@@ -119,23 +119,25 @@ controller_server:
       yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: "my_mpc_controller/MyMPCController"
-      n: 10
+      n: 20
       # 状态权重
-      q_11: 70.0 # x
-      q_22: 70.0 # y
+      q_11: 80.0 # x
+      q_22: 80.0 # y
       q_33: 5.0 # a
       # 控制权重
       r_11: 0.2  # v_x
       r_22: 0.2  # v_y
       r_33: 1.0  # w
       # 终端权重
-      f_11: 80.0 # x
-      f_22: 80.0 # y
+      f_11: 90.0 # x
+      f_22: 90.0 # y
       f_33: 10.0 # a
       # 最大速度
-      v_max: 2.0
+      v_max: 1.0
+      w_max: 1.0
       # 最大加速度
-      a_max: 1.5
+      a_v_max: 2.0
+      a_w_max: 1.0
       transform_tolerance: 0.1
       goal_checker_plugin: "general_goal_checker"
       progress_checker_plugin: "progress_checker"
@@ -322,10 +324,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [1.0, 1.0, 2.0]
-    min_velocity: [-1.0, -1.0, -2.0]
-    max_accel: [2.5, 2.5, 3.2]
-    max_decel: [-2.5, -2.5, -3.2]
+    max_velocity: [1.2, 1.2, 3.0]
+    min_velocity: [-1.2, -1.2, -3.0]
+    max_accel: [1.5, 1.5, 3.2]
+    max_decel: [-1.5, -1.5, -3.2]
     odom_topic: "/ground_truth"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]

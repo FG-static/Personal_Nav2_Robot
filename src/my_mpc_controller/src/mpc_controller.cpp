@@ -58,6 +58,12 @@ namespace my_mpc_controller {
         nav2_util::declare_parameter_if_not_declared(
             node, plugin_name_ + ".w_max", rclcpp::ParameterValue(1.0));
         node->get_parameter(plugin_name_ + ".w_max", max_w_);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".a_v_max", rclcpp::ParameterValue(1.5));
+        node->get_parameter(plugin_name_ + ".a_v_max", max_a_v_);
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".a_w_max", rclcpp::ParameterValue(1.0));
+        node->get_parameter(plugin_name_ + ".a_w_max", max_a_w_);
 
 
         Q_.setIdentity(); 
@@ -85,6 +91,7 @@ namespace my_mpc_controller {
 
         // 调试用
         mpc_debug_pub_ = node->create_publisher<geometry_msgs::msg::TwistStamped>("/mpc_debug/u", 1);
+        ref_path_pub_ = node->create_publisher<nav_msgs::msg::Path>(plugin_name_ + "/target_path", 10);
             
         RCLCPP_INFO(logger_, "自定义MPC控制器配置完成");
     }
@@ -140,6 +147,10 @@ namespace my_mpc_controller {
 
     /**
      * @brief 线性插值辅助函数
+     * @param path 原始路径
+     * @param s_target 目标 s 值
+     * @param start_search_idx 起始搜索索引
+     * @return Eigen::Vector3d 目标点坐标
      */
     Eigen::Vector3d interpolatePathByS(const std::vector<PathPoint>& path, double s_target, int start_search_idx) {
         
@@ -228,6 +239,38 @@ namespace my_mpc_controller {
         }
 
         return x_ref_vec;
+    }
+
+    /**
+     * @brief 发布轨迹消息
+     * @param X_ref 参考轨迹序列
+     * @return 无
+     */
+    void MyMPCController::publish_trajectory_msg(const Eigen::VectorXd &X_ref) {
+
+        auto path_msg = std::make_shared<nav_msgs::msg::Path>();
+        path_msg->header.stamp = clock_->now();
+        path_msg->header.frame_id = "odom";
+
+        for (int i = 0; i <= N_; ++ i) {
+
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header = path_msg->header;
+            
+            // 提取 x, y
+            pose.pose.position.x = X_ref(3 * i);
+            pose.pose.position.y = X_ref(3 * i + 1);
+            pose.pose.position.z = 0.01;
+
+            // 提取 theta 并转换为四元数
+            double theta = X_ref(3 * i + 2);
+            tf2::Quaternion q;
+            q.setRPY(0, 0, theta);
+            pose.pose.orientation = tf2::toMsg(q);
+
+            path_msg->poses.push_back(pose);
+        }
+        ref_path_pub_->publish(*path_msg);
     }
 
     void MyMPCController::updateDiscreteModel(
@@ -351,7 +394,10 @@ namespace my_mpc_controller {
         last_time = current_time;
 
         // X_ref
-        Eigen::VectorXd X_ref = sampleReferencePath(processed_path_, x_k, velocity.linear.x, N_, dt);
+        //RCLCPP_INFO(logger_, "dt: %f", dt);
+        double v_ref_x = velocity.linear.x, v_ref_y = velocity.linear.y, w_ref = velocity.angular.z;
+        double v_ref = std::max(0.25, std::hypot(v_ref_x, v_ref_y));
+        Eigen::VectorXd X_ref = sampleReferencePath(processed_path_, x_k, v_ref, N_, dt);
 
         // 线性化AB
         Eigen::Matrix3d A;
@@ -364,16 +410,56 @@ namespace my_mpc_controller {
         // 求解U
         Eigen::SparseMatrix<double> H_sparse = 2.0 * mpcm.H.sparseView();
         int n = mpcm.f.rows();
-        Eigen::VectorXd l(n), u(n);
+        Eigen::VectorXd l(2 * n), u(2 * n);
         Eigen::VectorXd U_sol = Eigen::VectorXd::Zero(n);
-        for (int i = 0; i < n / 3; ++i) {
 
-            l(3 * i) = -max_v_; // v_x
-            u(3 * i) = max_v_;
-            l(3 * i + 1) = -max_v_; // v_y
-            u(3 * i + 1) = max_v_;
-            l(3 * i + 2) = -max_w_; // w
-            u(3 * i + 2) = max_w_;
+        // 构建完整约束矩阵A
+        std::vector<Eigen::Triplet<double>> A_tri;
+        for (int i = 0; i < n / 3; ++ i) {
+
+            int col = 3 * i, row = 3 * i;
+            int row_acc = row + n;
+
+            // A 上半部分填充
+            A_tri.emplace_back(row, col, 1.0);
+            A_tri.emplace_back(row + 1, col + 1, 1.0);
+            A_tri.emplace_back(row + 2, col + 2, 1.0);
+
+            l(row) = -max_v_;
+            u(row) = max_v_;
+            l(row + 1) = -max_v_;
+            u(row + 1) = max_v_;
+            l(row + 2) = -max_w_;
+            u(row + 2) = max_w_;
+
+            // A 下半部分填充
+            A_tri.emplace_back(row_acc, col, 1.0);
+            A_tri.emplace_back(row_acc + 1, col + 1, 1.0);
+            A_tri.emplace_back(row_acc + 2, col + 2, 1.0);
+
+            if (i == 0) {
+
+                // 第一步基于初始速度
+                l(row_acc) = v_ref_x - max_a_v_ * dt;
+                u(row_acc) = v_ref_x + max_a_v_ * dt;
+                l(row_acc + 1) = v_ref_y - max_a_v_ * dt;
+                u(row_acc + 1) = v_ref_y + max_a_v_ * dt;
+                l(row_acc + 2) = w_ref - max_a_w_ * dt;
+                u(row_acc + 2) = w_ref + max_a_w_ * dt;
+            } else {
+
+                // 后续步计算速度差值
+                l(row_acc) = -max_a_v_ * dt;
+                u(row_acc) = max_a_v_ * dt;
+                l(row_acc + 1) = -max_a_v_ * dt;
+                u(row_acc + 1) = max_a_v_ * dt;
+                l(row_acc + 2) = -max_a_w_ * dt;
+                u(row_acc + 2) = max_a_w_ * dt;
+
+                A_tri.emplace_back(row_acc, col - 3, -1.0);
+                A_tri.emplace_back(row_acc + 1, col - 2, -1.0);
+                A_tri.emplace_back(row_acc + 2, col - 1, -1.0);
+            }
         }
 
         // OSQP 求约束解
@@ -381,13 +467,13 @@ namespace my_mpc_controller {
         OSQPSettings *settings = (OSQPSettings*)c_malloc(sizeof(OSQPSettings));
         OSQPData *data = (OSQPData*)c_malloc(sizeof(OSQPData));
         Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> H_csc = H_sparse.triangularView<Eigen::Upper>(); // csc形式
-        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> A_csc(n, n);
-        A_csc.setIdentity();
+        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> A_csc(2 * n, n);
+        A_csc.setFromTriplets(A_tri.begin(), A_tri.end());
         A_csc.makeCompressed();
         H_csc.makeCompressed();
 
         data->n = n; // 变量
-        data->m = n; // 约束
+        data->m = 2 * n; // 约束
         data->P = csc_matrix( // csc矩阵信息
             n, n,
             H_csc.nonZeros(),
@@ -397,7 +483,7 @@ namespace my_mpc_controller {
         );
         data->q = mpcm.f.data(); // 一次项
         data->A = csc_matrix( // 约束矩阵
-            n, n, 
+            2 * n, n, 
             A_csc.nonZeros(),
             A_csc.valuePtr(),
             (c_int*)A_csc.innerIndexPtr(),
@@ -464,6 +550,7 @@ namespace my_mpc_controller {
 
         // 发布调试信息至foxglove
         mpc_debug_pub_->publish(cmd_vel);
+        publish_trajectory_msg(X_ref);
 
         return cmd_vel;
     }

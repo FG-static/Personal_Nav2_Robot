@@ -96,21 +96,26 @@
         <link name="${prefix}_wheel_link">
             <visual>
                 <!--roll需要为pi/2的原因是圆柱体默认朝z轴向上，额这是之前的圆柱体代码，换成麦轮就不一样了-->
-                <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+                <!-- <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+                <geometry>
+                    <mesh filename="package://my_nav2_robot/meshes/mecanum_${prefix}_hands.stl" scale="0.001 0.001 0.001"/>
+                </geometry> -->
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
                 <geometry>
                     <!--圆柱体-->
-                    <mesh filename="package://my_nav2_robot/meshes/mecanum_${prefix}_hands.stl" scale="0.001 0.001 0.001"/>
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
                 </geometry>
                 <material name="black"/>
             </visual>
             <collision>
-                <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
                 <geometry>
-                    <mesh filename="package://my_nav2_robot/meshes/mecanum_${prefix}_hands.stl" scale="0.001 0.001 0.001"/>
+                    <!--圆柱体-->
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
                 </geometry>
             </collision>
             <xacro:inertial_cylinder mass="0.5" r="${wheel_radius}" h="${wheel_width}">
-                <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
             </xacro:inertial_cylinder>
         </link>
 
@@ -121,7 +126,7 @@
             <!--旋转轴-->
             <axis xyz="0 1 0"/>
             <limit effort="50" velocity="50"/>
-            <dynamics damping="0.0" friction="0.05"/>
+            <dynamics damping="0.1" friction="0.1"/>
         </joint>
 
         <gazebo reference="${prefix}_wheel_link">
@@ -129,10 +134,6 @@
             <mu2>0.5</mu2>     
             <kp>1000000.0</kp>
             <kd>1.0</kd>
-            <fdir1>1 0 0</fdir1>
-            <minDepth>0.001</minDepth>
-
-            <material>Gazebo/Black</material>
         </gazebo>
     </xacro:macro>
 
@@ -229,7 +230,7 @@
     <gazebo reference="camera_link">
         <sensor name="depth_camera" type="rgbd_camera">
             <visualize>true</visualize>
-            <update_rate>1.0</update_rate> <!-- 原10hz，到时候再改回来 -->
+            <update_rate>10.0</update_rate> <!-- 原10hz，到时候再改回来 -->
             <topic>depth_camera</topic>
             <gz_frame_id>camera_link</gz_frame_id>
             <camera>
@@ -250,7 +251,7 @@
     <!--imu插件-->
     <gazebo reference="imu_link">
         <sensor name="imu" type="imu">
-            <update_rate>1.0</update_rate> <!-- 原100hz，到时候再改回来 -->
+            <update_rate>100.0</update_rate> <!-- 原100hz，到时候再改回来 -->
             <topic>imu</topic>
             <gz_frame_id>imu_link</gz_frame_id>
         </sensor>

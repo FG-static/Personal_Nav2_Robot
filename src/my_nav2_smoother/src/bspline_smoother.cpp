@@ -102,7 +102,7 @@ namespace my_bspline_smoother {
         std::vector<double> &p_smooth_y
     ) {
 
-        RCLCPP_INFO(node_->get_logger(), "BSpline算法启动");
+        //RCLCPP_INFO(node_->get_logger(), "BSpline算法启动");
         int n = p_ref_x.size();
         if (n < 4) return false;
 

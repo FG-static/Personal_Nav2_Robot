@@ -25,7 +25,7 @@ namespace my_nav2_planner {
             node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(0.1));
         node_->get_parameter(name_ + ".interpolation_resolution", interpolation_resolution_);
 
-        RCLCPP_INFO(node_->get_logger(), "自定义A*规划器配置完成");
+        //RCLCPP_INFO(node_->get_logger(), "自定义A*规划器配置完成");
     }
 
     void MyAStarPlanner::activate() { RCLCPP_INFO(node_->get_logger(), "插件已激活"); }
@@ -97,7 +97,7 @@ namespace my_nav2_planner {
                     int next_idx = ny * width + nx;
                     unsigned char cost = costmap_->getCost(nx, ny);
 
-                    if (cost >= 250 && cost <= 254) continue;
+                    if (cost >= 200 && cost <= 254) continue;
 
                     double extra_cost = (cost == 255) ? unknown_cost_ : 0.0,
                         step_cost = std::sqrt(dx * dx + dy * dy);
@@ -121,7 +121,7 @@ namespace my_nav2_planner {
             // 记录算法耗时
             auto end_time = std::chrono::steady_clock::now();
             auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-            RCLCPP_INFO(node_->get_logger(), "A* planning completed in %ld ms", duration_ms);
+            //RCLCPP_INFO(node_->get_logger(), "A* planning completed in %ld ms", duration_ms);
             
             std::vector<int> path_;
             int curr_idx = goal_idx;
