@@ -19,14 +19,9 @@ find_package(tf2_eigen REQUIRED)
 
 add_executable(robot_driver src/robot_driver.cpp)
 add_executable(odom_evaluator src/odom_evaluator.cpp)
-ament_target_dependencies(robot_driver 
-    rclcpp 
-    geometry_msgs 
-    nav_msgs 
-    tf2 
-    tf2_ros
-)
+
 ament_target_dependencies(odom_evaluator
+    robot_driver
     rclcpp 
     geometry_msgs 
     nav_msgs 
