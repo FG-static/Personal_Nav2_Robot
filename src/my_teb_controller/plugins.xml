@@ -1,0 +1,10 @@
+<library path="my_teb_controller_lib">
+  <class
+    name="my_teb_controller/MyTebController"
+    type="my_teb_controller::MyTebController"
+    base_class_type="nav2_core::Controller">
+    <description>
+      This is a TEB local planner controller plugin skeleton.
+    </description>
+  </class>
+</library>
