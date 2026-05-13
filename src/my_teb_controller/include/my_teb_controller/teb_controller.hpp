@@ -54,11 +54,18 @@ protected:
         const nav_msgs::msg::Path &global_path,
         const PoseSE2 &start_pose);
 
-    void optimizeTEB(const PoseSE2 &goal_pose);
+    bool optimizeTEB(const PoseSE2 &goal_pose);
 
     geometry_msgs::msg::TwistStamped extractVelocity(
         const PoseSE2 &robot_pose,
         const geometry_msgs::msg::Twist &robot_vel);
+
+    PoseSE2 mecanumForwardKinematics(
+        double v_x,
+        double v_y,
+        double omega,
+        double theta,
+        double dt) const;
 
     bool checkTrajectoryFeasibility();
 
@@ -84,9 +91,7 @@ protected:
     std::vector<TimedPose> initial_teb_trajectory_;
     ObstacleSamples obstacle_samples_;
     TebConfig config_;
-    double last_v_x_ = 0.0;
-    double last_v_y_ = 0.0;
-    double last_omega_ = 0.0;
+    MecanumVelocity last_velocity_;
     bool needs_reinitialization_ = true;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr teb_marker_pub_;
     rclcpp::Duration transform_tolerance_{0, 0};

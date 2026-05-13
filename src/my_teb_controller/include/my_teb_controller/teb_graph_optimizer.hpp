@@ -37,7 +37,7 @@ private:
         const PoseSE2 &goal_pose,
         const ObstacleSamples &obstacles,
         const TebConfig &config);
-    void copyBack(std::vector<TimedPose> &trajectory) const;
+    void copyBack(std::vector<TimedPose> &trajectory, const TebConfig &config) const;
     void clear();
     Eigen::Vector2d findNearestObstacle(const PoseSE2 &pose, const ObstacleSamples &obstacles) const;
 

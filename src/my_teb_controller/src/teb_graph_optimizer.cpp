@@ -11,6 +11,15 @@
 
 namespace my_teb_controller {
 
+namespace {
+
+double minimumTimeDiff(const TebConfig &config) {
+
+    return std::max(1e-2, config.dt_ref - config.dt_hysteresis);
+}
+
+} // namespace
+
 /**
  * @brief 优化函数，构建图并求解
  * @param trajectory 优化后的轨迹
@@ -49,7 +58,7 @@ bool TebGraphOptimizer::optimize(
         return false;
     }
 
-    copyBack(trajectory);
+    copyBack(trajectory, config);
     clear();
     return true;
 }
@@ -129,7 +138,7 @@ bool TebGraphOptimizer::buildGraph(
 
         auto *dt_vertex = new VertexTimeDiff();
         dt_vertex->setId(next_vertex_id++);
-        dt_vertex->setEstimate(std::max(trajectory[index].dt, 1e-3));
+        dt_vertex->setEstimate(std::max(trajectory[index].dt, minimumTimeDiff(config)));
         optimizer_.addVertex(dt_vertex);
         dt_vertices_.push_back(dt_vertex);
 
@@ -201,12 +210,12 @@ bool TebGraphOptimizer::buildGraph(
  * @brief 路径转换给外部调用轨迹数组
  * @param trajectory 轨迹数组
  */
-void TebGraphOptimizer::copyBack(std::vector<TimedPose> &trajectory) const {
+void TebGraphOptimizer::copyBack(std::vector<TimedPose> &trajectory, const TebConfig &config) const {
 
     for (size_t index = 0; index < pose_vertices_.size() && index < trajectory.size(); ++index) {
         trajectory[index].pose = pose_vertices_[index]->estimate();
         if (index < dt_vertices_.size()) {
-            trajectory[index].dt = std::max(dt_vertices_[index]->estimate(), 1e-3);
+            trajectory[index].dt = std::max(dt_vertices_[index]->estimate(), minimumTimeDiff(config));
         } else {
             trajectory[index].dt = 0.0;
         }

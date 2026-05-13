@@ -37,6 +37,13 @@ struct TimedPose {
     TimedPose(const PoseSE2 &pose, double dt);
 };
 
+struct MecanumVelocity {
+
+    double v_x = 0.0;
+    double v_y = 0.0;
+    double omega = 0.0;
+};
+
 struct TebConfig {
 
     bool teb_autosize = true;
@@ -58,13 +65,12 @@ struct TebConfig {
     double weight_kinematics = 500.0;
 
     double max_vel_x = 0.5;
-    double max_vel_x_backwards = 0.2;
+    double max_vel_y = 0.5;
     double max_vel_theta = 1.0;
     double acc_lim_x = 2.0;
+    double acc_lim_y = 2.0;
     double acc_lim_theta = 1.5;
-    double min_turning_radius = 0.0;
 
-    bool is_holonomic = true;
     bool optimizer_verbose = false;
     double goal_tolerance_band = 0.25;
     double reinit_pose_distance = 0.3;

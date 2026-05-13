@@ -19,6 +19,42 @@ using nav2_util::declare_parameter_if_not_declared;
 
 namespace my_teb_controller {
 
+namespace {
+
+/**
+ * @brief 计算两个位姿之间的速度
+ * @param from_pose 起始位姿，世界坐标系下的 (x, y, θ)
+ * @param to_pose 终止位姿，世界坐标系下的 (x, y, θ)
+ * @param dt 两帧之间的时间间隔
+ * @return MecanumVelocity 机体坐标系下的速度 (v_x, v_y, omega)
+ */
+MecanumVelocity computeSegmentVelocity(const PoseSE2 &from_pose, const PoseSE2 &to_pose, double dt) {
+
+    const double bounded_dt = std::max(dt, 1e-3);
+    const double dx_world = to_pose.x - from_pose.x;
+    const double dy_world = to_pose.y - from_pose.y;
+    const double cos_theta = std::cos(from_pose.theta);
+    const double sin_theta = std::sin(from_pose.theta);
+
+    MecanumVelocity velocity;
+    velocity.v_x = (cos_theta * dx_world + sin_theta * dy_world) / bounded_dt;
+    velocity.v_y = (-sin_theta * dx_world + cos_theta * dy_world) / bounded_dt;
+    velocity.omega = angles::normalize_angle(to_pose.theta - from_pose.theta) / bounded_dt;
+    return velocity;
+}
+
+bool withinSymmetricLimit(double value, double limit) {
+
+    return std::abs(value) <= limit + 1e-6;
+}
+
+double minimumTimeDiff(const TebConfig &config) {
+
+    return std::max(1e-2, config.dt_ref - config.dt_hysteresis);
+}
+
+} // namespace
+
 PoseSE2::PoseSE2(double x_in, double y_in, double theta_in)
 : x(x_in), y(y_in), theta(theta_in) {}
 
@@ -94,12 +130,11 @@ void MyTebController::configure(
     declare_double_param("weight_smoothness", config_.weight_smoothness, config_.weight_smoothness);
     declare_double_param("weight_kinematics", config_.weight_kinematics, config_.weight_kinematics);
     declare_double_param("max_vel_x", config_.max_vel_x, config_.max_vel_x);
-    declare_double_param("max_vel_x_backwards", config_.max_vel_x_backwards, config_.max_vel_x_backwards);
+    declare_double_param("max_vel_y", config_.max_vel_y, config_.max_vel_y);
     declare_double_param("max_vel_theta", config_.max_vel_theta, config_.max_vel_theta);
     declare_double_param("acc_lim_x", config_.acc_lim_x, config_.acc_lim_x);
+    declare_double_param("acc_lim_y", config_.acc_lim_y, config_.acc_lim_y);
     declare_double_param("acc_lim_theta", config_.acc_lim_theta, config_.acc_lim_theta);
-    declare_double_param("min_turning_radius", config_.min_turning_radius, config_.min_turning_radius);
-    declare_bool_param("is_holonomic", config_.is_holonomic, config_.is_holonomic);
     declare_bool_param("optimizer_verbose", config_.optimizer_verbose, config_.optimizer_verbose);
     declare_double_param("goal_tolerance_band", config_.goal_tolerance_band, config_.goal_tolerance_band);
     declare_double_param("reinit_pose_distance", config_.reinit_pose_distance, config_.reinit_pose_distance);
@@ -111,20 +146,21 @@ void MyTebController::configure(
     teb_marker_pub_ = node->create_publisher<visualization_msgs::msg::MarkerArray>(
         plugin_name_ + "/teb_markers", 10);
 
-    RCLCPP_INFO(logger_, "基于g2o的TEB控制器配置完成");
+    RCLCPP_INFO(logger_, "基于g2o的麦克纳姆轮TEB控制器配置完成");
 }
 
-void MyTebController::activate() { RCLCPP_INFO(logger_, "插件已激活"); }
+void MyTebController::activate() { RCLCPP_INFO(logger_, "麦克纳姆轮TEB插件已激活"); }
 
-void MyTebController::deactivate() { RCLCPP_INFO(logger_, "插件已停用"); }
+void MyTebController::deactivate() { RCLCPP_INFO(logger_, "麦克纳姆轮TEB插件已停用"); }
 
 void MyTebController::cleanup() {
 
     teb_trajectory_.clear();
     initial_teb_trajectory_.clear();
     obstacle_samples_.clear();
+    last_velocity_ = MecanumVelocity{};
     needs_reinitialization_ = true;
-    RCLCPP_INFO(logger_, "插件已清理");
+    RCLCPP_INFO(logger_, "麦克纳姆轮TEB插件已清理");
 }
 
 void MyTebController::setPlan(const nav_msgs::msg::Path &path) {
@@ -148,6 +184,7 @@ geometry_msgs::msg::TwistStamped MyTebController::computeVelocityCommands(
     cmd_vel.header.frame_id = "base_link";
 
     if (global_plan_.poses.empty()) {
+        last_velocity_ = MecanumVelocity{};
         return cmd_vel;
     }
 
@@ -159,6 +196,7 @@ geometry_msgs::msg::TwistStamped MyTebController::computeVelocityCommands(
     local_plan_ = cropGlobalPlan(robot_pose);
     if (local_plan_.poses.empty()) {
         RCLCPP_WARN(logger_, "Local TEB plan is empty after cropping, returning zero velocity");
+        last_velocity_ = MecanumVelocity{};
         return cmd_vel;
     }
 
@@ -168,6 +206,7 @@ geometry_msgs::msg::TwistStamped MyTebController::computeVelocityCommands(
     }
 
     if (teb_trajectory_.size() < 2) {
+        last_velocity_ = MecanumVelocity{};
         return cmd_vel;
     }
 
@@ -180,10 +219,17 @@ geometry_msgs::msg::TwistStamped MyTebController::computeVelocityCommands(
     const PoseSE2 goal_pose(goal_msg.position.x, goal_msg.position.y, tf2::getYaw(goal_msg.orientation));
 
     // 开始进行teb规划算法
-    optimizeTEB(goal_pose);
+    if (!optimizeTEB(goal_pose)) {
+        RCLCPP_WARN(logger_, "TEB optimization failed, returning zero velocity");
+        last_velocity_ = MecanumVelocity{};
+        needs_reinitialization_ = true;
+        return cmd_vel;
+    }
 
     if (!checkTrajectoryFeasibility()) {
         RCLCPP_WARN(logger_, "Optimized TEB trajectory is not feasible, returning zero velocity");
+        last_velocity_ = MecanumVelocity{};
+        needs_reinitialization_ = true;
         return cmd_vel;
     }
 
@@ -191,9 +237,9 @@ geometry_msgs::msg::TwistStamped MyTebController::computeVelocityCommands(
     cmd_vel = extractVelocity(robot_pose, velocity);
     publishVisualization();
 
-    last_v_x_ = cmd_vel.twist.linear.x;
-    last_v_y_ = cmd_vel.twist.linear.y;
-    last_omega_ = cmd_vel.twist.angular.z;
+    last_velocity_.v_x = cmd_vel.twist.linear.x;
+    last_velocity_.v_y = cmd_vel.twist.linear.y;
+    last_velocity_.omega = cmd_vel.twist.angular.z;
     return cmd_vel;
 }
 
@@ -206,11 +252,28 @@ void MyTebController::initializeTrajectory(
 
     teb_trajectory_.emplace_back(start_pose, config_.dt_ref);
 
-    for (const auto &pose_stamped : global_path.poses) {
+    for (size_t pose_index = 0; pose_index < global_path.poses.size(); ++pose_index) {
+        const auto &pose_stamped = global_path.poses[pose_index];
         PoseSE2 next_pose(
             pose_stamped.pose.position.x,
             pose_stamped.pose.position.y,
             tf2::getYaw(pose_stamped.pose.orientation));
+
+        if (pose_index + 1 < global_path.poses.size()) {
+            const auto &next_msg = global_path.poses[pose_index + 1].pose.position;
+            const double dx = next_msg.x - pose_stamped.pose.position.x;
+            const double dy = next_msg.y - pose_stamped.pose.position.y;
+            if (std::hypot(dx, dy) > 1e-6) {
+                next_pose.theta = std::atan2(dy, dx);
+            }
+        } else if (!teb_trajectory_.empty()) {
+            const PoseSE2 &prev_pose = teb_trajectory_.back().pose;
+            const double dx = next_pose.x - prev_pose.x;
+            const double dy = next_pose.y - prev_pose.y;
+            if (std::hypot(dx, dy) > 1e-6) {
+                next_pose.theta = std::atan2(dy, dx);
+            }
+        }
 
         const double distance =
             (next_pose.position() - teb_trajectory_.back().pose.position()).norm();
@@ -237,21 +300,26 @@ void MyTebController::initializeTrajectory(
     needs_reinitialization_ = false;
 }
 
-void MyTebController::optimizeTEB(const PoseSE2 &goal_pose) {
+bool MyTebController::optimizeTEB(const PoseSE2 &goal_pose) {
 
     if (!graph_optimizer_) {
         throw nav2_core::ControllerException("TEB graph optimizer is not initialized");
     }
 
-    if (!graph_optimizer_->optimize(
-            teb_trajectory_,
-            initial_teb_trajectory_,
-            goal_pose,
-            obstacle_samples_,
-            config_,
-            config_.optimizer_verbose)) {
+    const bool ok = graph_optimizer_->optimize(
+        teb_trajectory_,
+        initial_teb_trajectory_,
+        goal_pose,
+        obstacle_samples_,
+        config_,
+        config_.optimizer_verbose);
+    if (!ok) {
         RCLCPP_WARN(logger_, "g2o TEB optimization failed");
+        return false;
     }
+
+    initial_teb_trajectory_ = teb_trajectory_;
+    return true;
 }
 
 geometry_msgs::msg::TwistStamped MyTebController::extractVelocity(
@@ -267,34 +335,58 @@ geometry_msgs::msg::TwistStamped MyTebController::extractVelocity(
     }
 
     const PoseSE2 &target_pose = teb_trajectory_[1].pose;
-    const double dt = std::max(teb_trajectory_[0].dt, 1e-3);
-    const double dx_world = target_pose.x - robot_pose.x;
-    const double dy_world = target_pose.y - robot_pose.y;
+    const double dt = std::max(teb_trajectory_[0].dt, minimumTimeDiff(config_));
+    MecanumVelocity desired_velocity = computeSegmentVelocity(robot_pose, target_pose, dt);
 
-    const double cos_theta = std::cos(robot_pose.theta);
-    const double sin_theta = std::sin(robot_pose.theta);
-    const double dx_robot = cos_theta * dx_world + sin_theta * dy_world;
-    const double dy_robot = -sin_theta * dx_world + cos_theta * dy_world;
-    const double heading_error = angles::normalize_angle(target_pose.theta - robot_pose.theta);
+    desired_velocity.v_x = std::clamp(desired_velocity.v_x, -config_.max_vel_x, config_.max_vel_x);
+    desired_velocity.v_y = std::clamp(desired_velocity.v_y, -config_.max_vel_y, config_.max_vel_y);
+    desired_velocity.omega =
+        std::clamp(desired_velocity.omega, -config_.max_vel_theta, config_.max_vel_theta);
 
-    double desired_v_x = dx_robot / dt;
-    double desired_v_y = config_.is_holonomic ? dy_robot / dt : 0.0;
-    double desired_omega = heading_error / dt;
+    const double max_dv_x = config_.acc_lim_x * dt;
+    const double max_dv_y = config_.acc_lim_y * dt;
+    const double max_domega = config_.acc_lim_theta * dt;
+    desired_velocity.v_x = std::clamp(
+        desired_velocity.v_x,
+        last_velocity_.v_x - max_dv_x,
+        last_velocity_.v_x + max_dv_x);
+    desired_velocity.v_y = std::clamp(
+        desired_velocity.v_y,
+        last_velocity_.v_y - max_dv_y,
+        last_velocity_.v_y + max_dv_y);
+    desired_velocity.omega = std::clamp(
+        desired_velocity.omega,
+        last_velocity_.omega - max_domega,
+        last_velocity_.omega + max_domega);
 
-    desired_v_x = std::clamp(desired_v_x, -config_.max_vel_x_backwards, config_.max_vel_x);
-    desired_v_y = std::clamp(desired_v_y, -config_.max_vel_x, config_.max_vel_x);
-    desired_omega = std::clamp(desired_omega, -config_.max_vel_theta, config_.max_vel_theta);
-
-    const double max_dv = config_.acc_lim_x * dt;
-    const double max_dw = config_.acc_lim_theta * dt;
-    desired_v_x = std::clamp(desired_v_x, last_v_x_ - max_dv, last_v_x_ + max_dv);
-    desired_v_y = std::clamp(desired_v_y, last_v_y_ - max_dv, last_v_y_ + max_dv);
-    desired_omega = std::clamp(desired_omega, last_omega_ - max_dw, last_omega_ + max_dw);
-
-    cmd_vel.twist.linear.x = desired_v_x;
-    cmd_vel.twist.linear.y = desired_v_y;
-    cmd_vel.twist.angular.z = desired_omega;
+    cmd_vel.twist.linear.x = desired_velocity.v_x;
+    cmd_vel.twist.linear.y = desired_velocity.v_y;
+    cmd_vel.twist.angular.z = desired_velocity.omega;
     return cmd_vel;
+}
+
+/**
+ * @brief 从车体坐标系速度推算世界坐标系下的位移增量
+ * @param v_x 车体坐标系x方向速度
+ * @param v_y 车体坐标系y方向速度
+ * @param omega 车体坐标系转角速度
+ * @param theta 车体坐标系当前朝向
+ * @param dt 时间增量
+ * @return 世界坐标系下的位移增量
+ */
+PoseSE2 MyTebController::mecanumForwardKinematics(
+    double v_x,
+    double v_y,
+    double omega,
+    double theta,
+    double dt) const {
+
+    const double cos_theta = std::cos(theta);
+    const double sin_theta = std::sin(theta);
+    return PoseSE2(
+        (v_x * cos_theta - v_y * sin_theta) * dt,
+        (v_x * sin_theta + v_y * cos_theta) * dt,
+        omega * dt);
 }
 
 bool MyTebController::checkTrajectoryFeasibility() {
@@ -304,16 +396,82 @@ bool MyTebController::checkTrajectoryFeasibility() {
     }
 
     for (const auto &timed_pose : teb_trajectory_) {
-        if (timed_pose.dt < 0.0) {
+        if (!std::isfinite(timed_pose.dt) || timed_pose.dt < 0.0) {
             return false;
         }
 
         const double obstacle_distance = getObstacleDistance(timed_pose.pose.x, timed_pose.pose.y);
         if (obstacle_distance < 0.0) {
-            return false;
+            continue;
         }
         if (obstacle_distance < config_.min_obstacle_dist) {
             return false;
+        }
+    }
+
+    for (size_t index = 0; index + 1 < teb_trajectory_.size(); ++index) {
+        const PoseSE2 &from_pose = teb_trajectory_[index].pose;
+        const PoseSE2 &to_pose = teb_trajectory_[index + 1].pose;
+        const double dt = teb_trajectory_[index].dt;
+        if (!std::isfinite(dt) || dt <= 0.0) {
+            return false;
+        }
+
+        const MecanumVelocity velocity = computeSegmentVelocity(from_pose, to_pose, dt);
+        if (!withinSymmetricLimit(velocity.v_x, config_.max_vel_x) ||
+            !withinSymmetricLimit(velocity.v_y, config_.max_vel_y) ||
+            !withinSymmetricLimit(velocity.omega, config_.max_vel_theta)) {
+            RCLCPP_DEBUG(
+                logger_,
+                "TEB segment exceeds mecanum velocity limits and will be clamped: vx=%.3f vy=%.3f omega=%.3f",
+                velocity.v_x,
+                velocity.v_y,
+                velocity.omega);
+        }
+
+        const PoseSE2 predicted_delta = mecanumForwardKinematics(
+            velocity.v_x,
+            velocity.v_y,
+            velocity.omega,
+            from_pose.theta,
+            dt);
+        const double delta_error = std::hypot(
+            predicted_delta.x - (to_pose.x - from_pose.x),
+            predicted_delta.y - (to_pose.y - from_pose.y));
+        if (!std::isfinite(delta_error) || delta_error > 1e-3) {
+            return false;
+        }
+    }
+
+    for (size_t index = 0; index + 2 < teb_trajectory_.size(); ++index) {
+        const double dt_1 = teb_trajectory_[index].dt;
+        const double dt_2 = teb_trajectory_[index + 1].dt;
+        if (!std::isfinite(dt_1) || !std::isfinite(dt_2) || dt_1 <= 0.0 || dt_2 <= 0.0) {
+            return false;
+        }
+
+        const MecanumVelocity velocity_1 = computeSegmentVelocity(
+            teb_trajectory_[index].pose,
+            teb_trajectory_[index + 1].pose,
+            dt_1);
+        const MecanumVelocity velocity_2 = computeSegmentVelocity(
+            teb_trajectory_[index + 1].pose,
+            teb_trajectory_[index + 2].pose,
+            dt_2);
+        const double avg_dt = std::max(0.5 * (dt_1 + dt_2), 1e-3);
+
+        const double acc_x = (velocity_2.v_x - velocity_1.v_x) / avg_dt;
+        const double acc_y = (velocity_2.v_y - velocity_1.v_y) / avg_dt;
+        const double acc_theta = (velocity_2.omega - velocity_1.omega) / avg_dt;
+        if (!withinSymmetricLimit(acc_x, config_.acc_lim_x) ||
+            !withinSymmetricLimit(acc_y, config_.acc_lim_y) ||
+            !withinSymmetricLimit(acc_theta, config_.acc_lim_theta)) {
+            RCLCPP_DEBUG(
+                logger_,
+                "TEB segment exceeds mecanum acceleration limits and will be clamped: ax=%.3f ay=%.3f atheta=%.3f",
+                acc_x,
+                acc_y,
+                acc_theta);
         }
     }
 

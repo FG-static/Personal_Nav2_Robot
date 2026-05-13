@@ -148,9 +148,9 @@ public:
         const double vy = (-sin_theta * dx_world + cos_theta * dy_world) / dt;
         const double omega = angles::normalize_angle(to_pose.theta - from_pose.theta) / dt;
 
-        // 速度约束
-        _error[0] = positiveBound(vx, config_->max_vel_x, config_->max_vel_x_backwards);
-        _error[1] = config_->is_holonomic ? symmetricBound(vy, config_->max_vel_x) : std::abs(vy);
+        // 麦克纳姆轮速度约束
+        _error[0] = symmetricBound(vx, config_->max_vel_x);
+        _error[1] = symmetricBound(vy, config_->max_vel_y);
         _error[2] = symmetricBound(omega, config_->max_vel_theta);
     }
 
@@ -158,20 +158,6 @@ public:
     bool write(std::ostream & /*os*/) const override { return false; }
 
 private:
-
-    // 这样设计的优点：
-    // 1. 只在越界时惩罚，合法范围内惩罚为0
-    // 2. 灵活设定上下界
-    static double positiveBound(double value, double upper, double lower_abs) {
-
-        if (value > upper) {
-            return value - upper;
-        }
-        if (value < -lower_abs) {
-            return -lower_abs - value;
-        }
-        return 0.0;
-    }
 
     static double symmetricBound(double value, double bound) {
 
@@ -219,7 +205,7 @@ public:
         const double alpha = (velocity_2[2] - velocity_1[2]) / avg_dt;
 
         _error[0] = symmetricBound(ax, config_->acc_lim_x);
-        _error[1] = config_->is_holonomic ? symmetricBound(ay, config_->acc_lim_x) : std::abs(ay);
+        _error[1] = symmetricBound(ay, config_->acc_lim_y);
         _error[2] = symmetricBound(alpha, config_->acc_lim_theta);
     }
 

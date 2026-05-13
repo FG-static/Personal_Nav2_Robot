@@ -15,7 +15,7 @@ find_library(G2O_SOLVER_EIGEN_LIBRARY
 )
 
 include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(g2o
+find_package_handle_standard_args(G2O
   REQUIRED_VARS
     G2O_INCLUDE_DIR
     G2O_CORE_LIBRARY
@@ -23,9 +23,9 @@ find_package_handle_standard_args(g2o
     G2O_SOLVER_EIGEN_LIBRARY
 )
 
-if(g2o_FOUND AND NOT TARGET g2o::all)
-  add_library(g2o::all INTERFACE IMPORTED)
-  set_target_properties(g2o::all PROPERTIES
+if(G2O_FOUND AND NOT TARGET G2O::all)
+  add_library(G2O::all INTERFACE IMPORTED)
+  set_target_properties(G2O::all PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${G2O_INCLUDE_DIR}"
     INTERFACE_LINK_LIBRARIES
       "${G2O_CORE_LIBRARY};${G2O_STUFF_LIBRARY};${G2O_SOLVER_EIGEN_LIBRARY}"

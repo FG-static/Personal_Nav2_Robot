@@ -23,9 +23,11 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(angles REQUIRED)
-find_package(g2o REQUIRED)
+find_package(G2O REQUIRED MODULE)
 
-include_directories(include)
+include_directories(
+  include
+)
 
 add_library(${PROJECT_NAME}_lib SHARED
   src/teb_controller.cpp
@@ -50,7 +52,7 @@ ament_target_dependencies(${PROJECT_NAME}_lib
 )
 
 target_link_libraries(${PROJECT_NAME}_lib
-  g2o::all
+  G2O::all
 )
 
 pluginlib_export_plugin_description_file(nav2_core plugins.xml)
@@ -67,7 +69,7 @@ install(DIRECTORY include/
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_lib)
-ament_export_dependencies(nav2_core nav2_util pluginlib rclcpp g2o)
+ament_export_dependencies(nav2_core nav2_util pluginlib rclcpp)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

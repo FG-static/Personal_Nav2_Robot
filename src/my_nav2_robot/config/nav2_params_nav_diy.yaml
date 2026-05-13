@@ -118,29 +118,32 @@ controller_server:
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
     FollowPath:
-      plugin: "my_mpc_controller/MyMPCController"
-      n: 20
-      # 状态权重
-      q_11: 80.0 # x
-      q_22: 80.0 # y
-      q_33: 5.0 # a
-      # 控制权重
-      r_11: 0.2  # v_x
-      r_22: 0.2  # v_y
-      r_33: 1.0  # w
-      # 终端权重
-      f_11: 90.0 # x
-      f_22: 90.0 # y
-      f_33: 10.0 # a
-      # 最大速度
-      v_max: 1.0
-      w_max: 1.0
-      # 最大加速度
-      a_v_max: 2.0
-      a_w_max: 1.0
+      plugin: "my_teb_controller/MyTebController"
+      teb_autosize: true
+      dt_ref: 0.25
+      dt_hysteresis: 0.08
+      min_samples: 4
+      max_samples: 40
+      min_obstacle_dist: 0.20
+      inflation_dist: 0.50
+      costmap_weight: 100.0
+      no_iterations: 8
+      penalty_epsilon: 0.10
+      weight_obstacle: 60.0
+      weight_optimaltime: 1.0
+      weight_shortest_path: 0.2
+      weight_smoothness: 40.0
+      weight_kinematics: 20.0
+      max_vel_x: 1.0
+      max_vel_y: 1.0
+      max_vel_theta: 1.0
+      acc_lim_x: 2.0
+      acc_lim_y: 2.0
+      acc_lim_theta: 1.0
+      optimizer_verbose: false
+      goal_tolerance_band: 0.25
+      reinit_pose_distance: 0.35
       transform_tolerance: 0.1
-      goal_checker_plugin: "general_goal_checker"
-      progress_checker_plugin: "progress_checker"
 
 local_costmap:
   local_costmap:
