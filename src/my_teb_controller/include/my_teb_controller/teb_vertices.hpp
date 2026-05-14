@@ -8,7 +8,7 @@
 
 #include "my_teb_controller/teb_types.hpp"
 
-// 重写g2o::BaseVertex的oplusImpl和setToOriginImpl方法，适配该项目
+// 重写g2o::BaseVertex的oplusImpl和oplusImpl方法，适配该项目
 namespace my_teb_controller {
 
 class VertexPose : public g2o::BaseVertex<3, PoseSE2> {
