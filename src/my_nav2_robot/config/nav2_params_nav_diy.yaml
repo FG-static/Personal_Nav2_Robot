@@ -27,7 +27,7 @@ amcl:
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
     resample_interval: 2
-    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    robot_model_type: "nav2_amcl::OmniMotionModel"
     save_pose_rate: 0.5
     sigma_hit: 0.2
     tf_broadcast: true
@@ -100,8 +100,8 @@ controller_server:
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.5
-      movement_time_allowance: 10.0
+      required_movement_radius: 0.2
+      movement_time_allowance: 15.0
     # Goal checker parameters
     #precise_goal_checker:
     #  plugin: "nav2_controller::SimpleGoalChecker"
@@ -138,7 +138,8 @@ controller_server:
       acc_lim_theta: 1.0
       optimizer_verbose: false
       goal_tolerance_band: 0.25
-      reinit_pose_distance: 0.35
+      reinit_pose_distance: 0.15
+      control_lookahead_dist: 0.25
       transform_tolerance: 0.1
 
 local_costmap:
@@ -270,10 +271,14 @@ planner_server:
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       primitive_duration: 0.2
       step_time: 0.05
-      yaw_bin_count: 96
-      heuristic_grid_weight: 1.0
-      heuristic_yaw_weight: 0.1
-      rs_weight: 0.05
+      yaw_bin_count: 96 # 朝向离散桶数
+      heuristic_grid_weight: 1.0 # h_2D 代价函数权重
+      heuristic_yaw_weight: 0.1 # 姿态误差权重
+      rs_weight: 0.05 # h_{reed_shepp} 代价函数权重
+      reuse_path_if_valid: true
+      immediate_replan_if_blocked: true
+      replan_time_threshold: 4.0
+      path_prune_distance: 0.15
 
 smoother_server:
   ros__parameters:

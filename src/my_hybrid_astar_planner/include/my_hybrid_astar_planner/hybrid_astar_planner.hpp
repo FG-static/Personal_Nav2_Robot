@@ -117,6 +117,10 @@ struct PlannerParams {
     double rs_reverse_penalty = 0.4;
     double rs_gear_switch_penalty = 0.2;
     double analytic_expansion_distance = 2.0;
+    double replan_time_threshold = 2.0;
+    double path_prune_distance = 0.15;
+    bool immediate_replan_if_blocked = true;
+    bool reuse_path_if_valid = true;
 };
 
 class MyHybridAStarPlanner : public nav2_core::GlobalPlanner {
@@ -183,6 +187,19 @@ private:
         const geometry_msgs::msg::PoseStamped &start,
         const geometry_msgs::msg::PoseStamped &goal
     ) const;
+    bool isCachedPathBlocked(const nav_msgs::msg::Path &path) const;
+    nav_msgs::msg::Path pruneCachedPath(
+        const nav_msgs::msg::Path &path,
+        const geometry_msgs::msg::PoseStamped &cur_pose
+    ) const;
+    int findBestPruneIndex(
+        const nav_msgs::msg::Path &path,
+        const geometry_msgs::msg::PoseStamped &cur_pose
+    ) const;
+    double pointDistance2D(
+        const geometry_msgs::msg::PoseStamped &a,
+        const geometry_msgs::msg::PoseStamped &b
+    ) const;
 
     std::shared_ptr<tf2_ros::Buffer> tf_;
     nav2_util::LifecycleNode::SharedPtr node_;
@@ -193,6 +210,9 @@ private:
     std::vector<MotionPrimitive> motion_primitives_;
     std::vector<double> heuristic_grid_;
     bool heuristic_ready_{false};
+    nav_msgs::msg::Path last_path_;
+    bool has_last_path_{false};
+    rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};
 };
 
 } // namespace my_hybrid_astar_planner

@@ -112,6 +112,22 @@ void MyHybridAStarPlanner::configure(
         "analytic_expansion_distance",
         params_.analytic_expansion_distance,
         params_.analytic_expansion_distance);
+    declare_double_param(
+        "replan_time_threshold",
+        params_.replan_time_threshold,
+        params_.replan_time_threshold);
+    declare_double_param(
+        "path_prune_distance",
+        params_.path_prune_distance,
+        params_.path_prune_distance);
+    declare_bool_param(
+        "immediate_replan_if_blocked",
+        params_.immediate_replan_if_blocked,
+        params_.immediate_replan_if_blocked);
+    declare_bool_param(
+        "reuse_path_if_valid",
+        params_.reuse_path_if_valid,
+        params_.reuse_path_if_valid);
 
     buildMotionPrimitives();
 
@@ -178,6 +194,27 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         return global_path;
     }
 
+    const rclcpp::Time now = node_->now();
+
+    if (params_.reuse_path_if_valid && has_last_path_ && !last_path_.poses.empty()) {
+
+        const double cached_goal_error = pointDistance2D(last_path_.poses.back(), goal);
+        const bool same_goal = cached_goal_error <= params_.goal_tolerance_xy;
+        const bool blocked = params_.immediate_replan_if_blocked && isCachedPathBlocked(last_path_);
+        const bool timeout = (now - last_plan_time_).seconds() >= params_.replan_time_threshold;
+
+        if (same_goal && !blocked && !timeout) {
+
+            nav_msgs::msg::Path reused = pruneCachedPath(last_path_, start);
+            if (!reused.poses.empty()) {
+
+                reused.header.frame_id = global_frame_;
+                reused.header.stamp = now;
+                return reused;
+            }
+        }
+    }
+
     RCLCPP_INFO(
         node_->get_logger(),
         "Hybrid A* skeleton ready. Search phase will use %zu mecanum motion primitives.",
@@ -235,8 +272,14 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         if (current_node.closed) continue;
         current_node.closed = true;
 
-        if (isGoalReached(current_node.pose, goal_pose))
-            return reconstructPath(nodes, cur_idx, start, goal);
+        if (isGoalReached(current_node.pose, goal_pose)) {
+
+            nav_msgs::msg::Path planned_path = reconstructPath(nodes, cur_idx, start, goal);
+            last_path_ = planned_path;
+            has_last_path_ = true;
+            last_plan_time_ = now;
+            return planned_path;
+        }
 
         for (const auto &primitive : motion_primitives_) {
 
@@ -298,6 +341,123 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     return global_path;
 }
 
+// 查障碍物是否挡住障碍物
+bool MyHybridAStarPlanner::isCachedPathBlocked(const nav_msgs::msg::Path &path) const {
+
+    for (const auto &pose : path.poses) {
+
+        unsigned int mx = 0;
+        unsigned int my = 0;
+        if (!costmap_->worldToMap(pose.pose.position.x, pose.pose.position.y, mx, my))
+            return true;
+
+        const unsigned char cost = costmap_->getCost(mx, my);
+        if (cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE &&
+            cost != nav2_costmap_2d::NO_INFORMATION)
+            return true;
+    }
+
+    return false;
+}
+
+nav_msgs::msg::Path MyHybridAStarPlanner::pruneCachedPath(
+    const nav_msgs::msg::Path &path,
+    const geometry_msgs::msg::PoseStamped &cur_pose
+) const {
+
+    nav_msgs::msg::Path pruned;
+    pruned.header = path.header;
+
+    if (path.poses.empty())
+        return pruned;
+
+    geometry_msgs::msg::PoseStamped current = cur_pose;
+    current.header = path.header;
+    pruned.poses.push_back(current);
+
+    const int prune_index = findBestPruneIndex(path, cur_pose);
+    for (int i = prune_index; i < static_cast<int>(path.poses.size()); ++ i)
+        pruned.poses.push_back(path.poses[i]);
+
+    if (pruned.poses.size() == 1)
+        pruned.poses.push_back(path.poses.back());
+
+    return pruned;
+}
+
+int MyHybridAStarPlanner::findBestPruneIndex(
+    const nav_msgs::msg::Path &path,
+    const geometry_msgs::msg::PoseStamped &cur_pose
+) const {
+
+    if (path.poses.size() < 2)
+        return 0;
+
+    const double ox = cur_pose.pose.position.x;
+    const double oy = cur_pose.pose.position.y;
+    double best_distance_sq = std::numeric_limits<double>::infinity();
+    int best_index = 0;
+
+    for (std::size_t i = 0; i + 1 < path.poses.size(); ++ i) {
+
+        const auto &p1 = path.poses[i].pose.position;
+        const auto &p2 = path.poses[i + 1].pose.position;
+        const double vx = p2.x - p1.x;
+        const double vy = p2.y - p1.y;
+        const double segment_len_sq = vx * vx + vy * vy;
+        if (segment_len_sq <= 1e-9)
+            continue;
+
+        const double t = ((ox - p1.x) * vx + (oy - p1.y) * vy) / segment_len_sq;
+        if (t < 0.0 || t > 1.0)
+            continue;
+
+        const double proj_x = p1.x + t * vx;
+        const double proj_y = p1.y + t * vy;
+        const double dx = ox - proj_x;
+        const double dy = oy - proj_y;
+        const double distance_sq = dx * dx + dy * dy;
+
+        if (distance_sq < best_distance_sq) {
+
+            best_distance_sq = distance_sq;
+            best_index = static_cast<int>(i + 1);
+        }
+    }
+
+    if (std::isfinite(best_distance_sq))
+        return std::min(best_index, static_cast<int>(path.poses.size()) - 1);
+
+    double nearest_distance_sq = std::numeric_limits<double>::infinity();
+    int nearest_index = 0;
+    for (std::size_t i = 0; i < path.poses.size(); ++ i) {
+
+        const double dx = ox - path.poses[i].pose.position.x;
+        const double dy = oy - path.poses[i].pose.position.y;
+        const double distance_sq = dx * dx + dy * dy;
+        if (distance_sq < nearest_distance_sq) {
+
+            nearest_distance_sq = distance_sq;
+            nearest_index = static_cast<int>(i);
+        }
+    }
+
+    if (std::sqrt(nearest_distance_sq) <= params_.path_prune_distance)
+        return std::min(nearest_index + 1, static_cast<int>(path.poses.size()) - 1);
+
+    return nearest_index;
+}
+
+double MyHybridAStarPlanner::pointDistance2D(
+    const geometry_msgs::msg::PoseStamped &a,
+    const geometry_msgs::msg::PoseStamped &b
+) const {
+
+    return std::hypot(
+        a.pose.position.x - b.pose.position.x,
+        a.pose.position.y - b.pose.position.y);
+}
+
 /**
  * @brief 路径回溯
  */
@@ -321,7 +481,8 @@ nav_msgs::msg::Path MyHybridAStarPlanner::reconstructPath(
     start_pose.header = path.header;
     path.poses.push_back(start_pose);
 
-    for (std::size_t i = 1; i < chain_indices.size(); ++i) {
+    for (std::size_t i = 1; i < chain_indices.size(); ++ i) {
+
         const HybridNode &parent_node = nodes[chain_indices[i - 1]];
         const HybridNode &child_node = nodes[chain_indices[i]];
         const MotionPrimitive *primitive = findMotionPrimitiveById(child_node.parent_primitive_id);
@@ -329,7 +490,8 @@ nav_msgs::msg::Path MyHybridAStarPlanner::reconstructPath(
             continue;
 
         PlannerPose pose = parent_node.pose;
-        for (std::size_t step = 0; step < primitive->samples.size(); ++step) {
+        for (std::size_t step = 0; step < primitive->samples.size(); ++ step) {
+
             pose = integrateMecanumMotion(
                 pose,
                 primitive->v_x,
