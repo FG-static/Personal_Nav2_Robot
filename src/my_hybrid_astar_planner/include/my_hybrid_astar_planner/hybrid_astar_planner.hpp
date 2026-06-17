@@ -96,8 +96,8 @@ struct HybridNode {
 struct PlannerParams {
 
     double unknown_cost = 5.0;
-    double interpolation_resolution = 0.1;
-    double xy_resolution = 0.1;
+    double interpolation_resolution = 0.05;
+    double xy_resolution = 0.05;
     int yaw_bin_count = 72;
     double step_time = 0.1;
     double primitive_duration = 0.5;

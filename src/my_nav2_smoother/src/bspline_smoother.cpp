@@ -2,6 +2,10 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include <algorithm>
+#include <cmath>
+#include <rclcpp/parameter_value.hpp>
+#include <vector>
 
 extern "C" {
 #include "osqp/osqp.h"
@@ -11,21 +15,33 @@ namespace my_bspline_smoother {
 
     void MyBSplineSmoother::configure(
         const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
-        std::string name, 
+        std::string name,
         std::shared_ptr<tf2_ros::Buffer> /*tf*/,
         std::shared_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_sub,
         std::shared_ptr<nav2_costmap_2d::FootprintSubscriber> /*footprint_sub*/
     ) {
-            
+
         costmap_sub_ = costmap_sub;
         node_ = parent.lock();
         name_ = name;
 
         nav2_util::declare_parameter_if_not_declared(node_, name + ".w_smooth", rclcpp::ParameterValue(10.0));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".w_guide", rclcpp::ParameterValue(1.0));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".max_vel", rclcpp::ParameterValue(1.0));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".max_acc", rclcpp::ParameterValue(1.0));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".max_jerk", rclcpp::ParameterValue(2.0));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".min_dt", rclcpp::ParameterValue(0.05));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".max_dt", rclcpp::ParameterValue(1.0));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".max_outer_iterations", rclcpp::ParameterValue(3));
 
         node_->get_parameter(name + ".w_smooth", w_smooth_);
         node_->get_parameter(name + ".w_guide", w_guide_);
+        node_->get_parameter(name + ".max_vel", max_vel_);
+        node_->get_parameter(name + ".max_acc", max_acc_);
+        node_->get_parameter(name + ".max_jerk", max_jerk_);
+        node_->get_parameter(name + ".min_dt", min_dt_);
+        node_->get_parameter(name + ".max_dt", max_dt_);
+        node_->get_parameter(name + ".max_outer_iterations", max_outer_iterations_);
     }
     void MyBSplineSmoother::activate() { RCLCPP_INFO(node_->get_logger(), "插件已激活"); }
     void MyBSplineSmoother::deactivate() { RCLCPP_INFO(node_->get_logger(), "插件已停用"); }
@@ -42,16 +58,16 @@ namespace my_bspline_smoother {
         return true;
     }
     void MyBSplineSmoother::applyBSplineAlgorithm(
-        nav_msgs::msg::Path &path, 
+        nav_msgs::msg::Path &path,
         const nav_msgs::msg::Path &raw_path
     ) {
 
         if (raw_path.poses.size() < 4) {
-            
+
             path = raw_path;
             return;
         }
-        std::vector<double> 
+        std::vector<double>
             ref_path_x,
             ref_path_y,
             smooth_path_x,
@@ -66,14 +82,14 @@ namespace my_bspline_smoother {
         for (int i = 0; i < n; ++ i) {
 
             double yaw;
-            
+
             if (i < n - 1) {
 
-                yaw = std::atan2(smooth_path_y[i + 1] - smooth_path_y[i], 
+                yaw = std::atan2(smooth_path_y[i + 1] - smooth_path_y[i],
                                 smooth_path_x[i + 1] - smooth_path_x[i]);
             } else {
 
-                yaw = std::atan2(smooth_path_y[i] - smooth_path_y[i - 1], 
+                yaw = std::atan2(smooth_path_y[i] - smooth_path_y[i - 1],
                                 smooth_path_x[i] - smooth_path_x[i - 1]);
             }
 
@@ -85,6 +101,39 @@ namespace my_bspline_smoother {
             path.poses[i].pose.orientation = tf2::toMsg(q);
         }
     }
+    /**
+     * @brief 第一次粗略时间分配
+     */
+    bool MyBSplineSmoother::computeTimeAllocation(
+        const std::vector<double> &p_ref_x,
+        const std::vector<double> &p_ref_y,
+        std::vector<double> &output
+    ) const {
+
+        const int n = static_cast<int>(p_ref_x.size());
+        output.clear();
+        output.reserve(std::max(0, n - 1));
+        for (int i = 0; i + 1 < n; ++ i) {
+
+            const double dx = p_ref_x[i + 1] - p_ref_x[i];
+            const double dy = p_ref_y[i + 1] - p_ref_y[i];
+            const double ds = std::hypot(dx, dy);
+
+            const double dt_vel = ds / std::max(max_vel_, 1e-3);
+            const double dt_acc = std::sqrt(ds / std::max(max_acc_, 1e-3));
+            const double dt_jerk = std::cbrt(ds / std::max(max_jerk_, 1e-3));
+
+            const double dt = std::clamp(
+                std::max({dt_vel, dt_acc, dt_jerk, min_dt_}),
+                min_dt_,
+                max_dt_
+            );
+
+            output.push_back(dt);
+        }
+        return true;
+    }
+
     /**
      * @brief 使用 B-Spline 二次规划平滑路径
      * @param p_ref 原始参考路径的坐标序列 (x 或 y)
@@ -106,15 +155,26 @@ namespace my_bspline_smoother {
         int n = p_ref_x.size();
         if (n < 4) return false;
 
+        std::vector<double> dt_segment;
+        computeTimeAllocation(p_ref_x, p_ref_y, dt_segment);
+
         Eigen::SparseMatrix<double> H(n, n);
         std::vector<Eigen::Triplet<double>> triplets;
         for (int i = 0; i < n - 3; ++ i) {
 
+            const double dt = std::max(
+                (dt_segment[i] + dt_segment[i + 1] + dt_segment[i + 2]) / 3.0,
+                min_dt_
+            );
+            const double time_w = w_s / std::pow(dt, 3);
             for (int r = 0; r < 4; ++ r) {
 
                 for(int c = 0; c < 4; ++ c) {
 
-                    triplets.push_back(Eigen::Triplet<double>(i + r, i + c, w_s * Q_data[r][c]));
+                    triplets.push_back(Eigen::Triplet<double>(
+                        i + r,
+                        i + c,
+                        time_w * Q_data[r][c]));
                 }
             }
         } // w_s H_s
@@ -128,18 +188,18 @@ namespace my_bspline_smoother {
 
         Eigen::VectorXd f_x(n), f_y(n);
         for (int i = 0; i < n; ++ i) {
-            
+
             f_x(i) = -w_g * p_ref_x[i];
             f_y(i) = -w_g * p_ref_y[i];
         } // f_{QP}
 
         // 边界约束
         Eigen::VectorXd l_x(n), u_x(n), l_y(n), u_y(n);
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++ i) {
 
-            l_x(i) = p_ref_x[i] - 1.0; 
+            l_x(i) = p_ref_x[i] - 1.0;
             u_x(i) = p_ref_x[i] + 1.0;
-            l_y(i) = p_ref_y[i] - 1.0; 
+            l_y(i) = p_ref_y[i] - 1.0;
             u_y(i) = p_ref_y[i] + 1.0;
             if (i < 2 || i > n - 3) {
 
@@ -149,7 +209,7 @@ namespace my_bspline_smoother {
                 u_y(i) = p_ref_y[i];
             }
         }
-        
+
         // OSQP求解
         OSQPSettings *settings = (OSQPSettings*)c_malloc(sizeof(OSQPSettings));
         OSQPData *data = (OSQPData*)c_malloc(sizeof(OSQPData));
@@ -170,7 +230,7 @@ namespace my_bspline_smoother {
         );
         data->q = f_x.data(); // 一次项
         data->A = csc_matrix( // 约束矩阵
-            n, n, 
+            n, n,
             A_csc.nonZeros(),
             A_csc.valuePtr(),
             (c_int*)A_csc.innerIndexPtr(),

@@ -18,6 +18,25 @@
 
 namespace my_bspline_smoother {
 
+    struct SegmentViolation {
+
+        int index = -1;
+        double ratio = 1.0;
+    };
+
+    struct DynamicReport {
+
+        bool ok = true;
+
+        double max_vel = 0.0;
+        double max_acc = 0.0;
+        double max_jerk = 0.0;
+
+        std::vector<SegmentViolation> vel_vios;
+        std::vector<SegmentViolation> acc_vios;
+        std::vector<SegmentViolation> jerk_vios;
+    };
+
     class MyBSplineSmoother : public nav2_core::Smoother {
 
     public:
@@ -27,7 +46,7 @@ namespace my_bspline_smoother {
 
         void configure(
             const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
-            std::string name, 
+            std::string name,
             std::shared_ptr<tf2_ros::Buffer> /*tf*/,
             std::shared_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_sub,
             std::shared_ptr<nav2_costmap_2d::FootprintSubscriber> /*footprint_sub*/) override;
@@ -51,10 +70,33 @@ namespace my_bspline_smoother {
             std::vector<double> &p_smooth_x,
             std::vector<double> &p_smooth_y);
 
+        // 时间分配
+        bool computeTimeAllocation(
+            const std::vector<double> &p_ref_x,
+            const std::vector<double> &p_ref_y,
+            std::vector<double> &output
+        ) const;
+        DynamicReport checkDynamicFeasibility(
+            const std::vector<double> &p_x,
+            const std::vector<double> &p_y,
+            const std::vector<double> &dt_segment
+        ) const;
+        // CorridorReport checkCorridorFeasibility(
+        //     const std::vector<double> &p_x,
+        //     const std::vector<double> &p_y,
+        //     const std::vector<double> &dt_segment
+        // ) const;
+
         // bspline参数
-        double 
+        double
             w_smooth_ = 10.0,
-            w_guide_ = 1.0;
+            w_guide_ = 1.0,
+            max_vel_ = 1.0,
+            max_acc_ = 1.0,
+            max_jerk_ = 2.0,
+            min_dt_ = 0.05,
+            max_dt_ = 1.0;
+        int max_outer_iterations_ = 3;
 
         const double Q_data[4][4] = {
             { 0.333333, -0.500000,  0.000000,  0.166667},
