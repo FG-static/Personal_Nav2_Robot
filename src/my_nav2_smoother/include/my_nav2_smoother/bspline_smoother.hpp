@@ -69,6 +69,14 @@ namespace my_bspline_smoother {
             double w_g,
             std::vector<double> &p_smooth_x,
             std::vector<double> &p_smooth_y);
+        bool solveBSplineQPOnce(
+            const std::vector<double> &p_ref_x,
+            const std::vector<double> &p_ref_y,
+            const std::vector<double> &dt_segment,
+            double w_s,
+            double w_g,
+            std::vector<double> &p_smooth_x,
+            std::vector<double> &p_smooth_y);
 
         // 时间分配
         bool computeTimeAllocation(
@@ -80,6 +88,10 @@ namespace my_bspline_smoother {
             const std::vector<double> &p_x,
             const std::vector<double> &p_y,
             const std::vector<double> &dt_segment
+        ) const;
+        void inflateTimeAllocation(
+            const DynamicReport &report,
+            std::vector<double> &dt_segment
         ) const;
         // CorridorReport checkCorridorFeasibility(
         //     const std::vector<double> &p_x,
@@ -95,7 +107,9 @@ namespace my_bspline_smoother {
             max_acc_ = 1.0,
             max_jerk_ = 2.0,
             min_dt_ = 0.05,
-            max_dt_ = 1.0;
+            max_dt_ = 1.0,
+            time_inflation_factor_ = 1.15,
+            max_time_scale_ = 2.0;
         int max_outer_iterations_ = 3;
 
         const double Q_data[4][4] = {

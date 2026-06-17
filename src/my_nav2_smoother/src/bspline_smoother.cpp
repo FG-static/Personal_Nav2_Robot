@@ -33,6 +33,8 @@ namespace my_bspline_smoother {
         nav2_util::declare_parameter_if_not_declared(node_, name + ".min_dt", rclcpp::ParameterValue(0.05));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".max_dt", rclcpp::ParameterValue(1.0));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".max_outer_iterations", rclcpp::ParameterValue(3));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".time_inflation_factor", rclcpp::ParameterValue(1.15));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".max_time_scale", rclcpp::ParameterValue(2.0));
 
         node_->get_parameter(name + ".w_smooth", w_smooth_);
         node_->get_parameter(name + ".w_guide", w_guide_);
@@ -42,6 +44,8 @@ namespace my_bspline_smoother {
         node_->get_parameter(name + ".min_dt", min_dt_);
         node_->get_parameter(name + ".max_dt", max_dt_);
         node_->get_parameter(name + ".max_outer_iterations", max_outer_iterations_);
+        node_->get_parameter(name + ".time_inflation_factor", time_inflation_factor_);
+        node_->get_parameter(name + ".max_time_scale", max_time_scale_);
     }
     void MyBSplineSmoother::activate() { RCLCPP_INFO(node_->get_logger(), "插件已激活"); }
     void MyBSplineSmoother::deactivate() { RCLCPP_INFO(node_->get_logger(), "插件已停用"); }
@@ -101,8 +105,106 @@ namespace my_bspline_smoother {
             path.poses[i].pose.orientation = tf2::toMsg(q);
         }
     }
+
+    /**
+     * @brief 状态约束超限检查
+     * @param p_x 规划的轨迹x分量
+     * @param p_y 规划的轨迹y分量
+     * @param dt_segment 前一次分配好的时间
+     * @return DynamicReport 报告超调的地方以及相关信息
+     */
+    DynamicReport MyBSplineSmoother::checkDynamicFeasibility(
+        const std::vector<double> &p_x,
+        const std::vector<double> &p_y,
+        const std::vector<double> &dt_segment
+    ) const {
+
+        DynamicReport report;
+        const int n = static_cast<int>(p_x.size());
+        if (n < 2 || static_cast<int>(dt_segment.size()) != n - 1) {
+
+            report.ok = false;
+            return report;
+        }
+
+        std::vector<Eigen::Vector2d> vel;
+        vel.reserve(n - 1);
+        for (int i = 0; i + 1 < n; ++ i) {
+
+            const double dt = std::max(dt_segment[i], min_dt_);
+
+            Eigen::Vector2d v(
+                (p_x[i + 1] - p_x[i]) / dt,
+                (p_y[i + 1] - p_y[i]) / dt
+            );
+            const double speed = v.norm();
+            report.max_vel = std::max(report.max_vel, speed);
+
+            if (speed > max_vel_) {
+
+                report.ok = false;
+                report.vel_vios.push_back({
+                    i,
+                    speed / std::max(max_vel_, 1e-6)
+                });
+            }
+            vel.push_back(v);
+        }
+
+        std::vector<Eigen::Vector2d> acc;
+        acc.reserve(std::max(0, n - 2));
+        for (int i = 0; i + 1 < static_cast<int>(vel.size()); ++ i) {
+
+            const double dt = std::max(
+                0.5 * (dt_segment[i] + dt_segment[i + 1]),
+                min_dt_
+            );
+
+            Eigen::Vector2d a = (vel[i + 1] - vel[i]) / dt;
+            const double _acc = a.norm();
+            report.max_acc = std::max(report.max_acc, _acc);
+
+            if (_acc > max_acc_) {
+
+                report.ok = false;
+                report.acc_vios.push_back({
+                    i,
+                    _acc / std::max(max_acc_, 1e-6)
+                });
+            }
+            acc.push_back(a);
+        }
+
+        for (int i = 0; i + 1 < static_cast<int>(acc.size()); ++ i) {
+
+            const double dt = std::max(
+                0.5 * (dt_segment[i + 1] + dt_segment[i + 2]),
+                min_dt_
+            );
+
+            Eigen::Vector2d j = (acc[i + 1] - acc[i]) / dt;
+            const double jerk = j.norm();
+
+            report.max_jerk = std::max(report.max_jerk, jerk);
+
+            if (jerk > max_jerk_) {
+
+                report.ok = false;
+                report.jerk_vios.push_back({
+                    i,
+                    jerk / std::max(max_jerk_, 1e-6)
+                });
+            }
+        }
+        return report;
+    }
+
     /**
      * @brief 第一次粗略时间分配
+     * @param p_ref_x 参考路径x分量
+     * @param p_ref_y 参考路径y分量
+     * @param output 输出时间分配数组
+     * @return bool 是否成功
      */
     bool MyBSplineSmoother::computeTimeAllocation(
         const std::vector<double> &p_ref_x,
@@ -134,6 +236,49 @@ namespace my_bspline_smoother {
         return true;
     }
 
+    void MyBSplineSmoother::inflateTimeAllocation(
+        const DynamicReport &report,
+        std::vector<double> &dt_segment
+    ) const {
+
+        auto inflate_segment =
+            [&](int index, double scale) {
+
+                if (index < 0 ||
+                    index >= static_cast<int>(dt_segment.size()))
+                    return;
+
+                const double safe_scale = std::clamp(
+                    scale * time_inflation_factor_,
+                    1.0,
+                    max_time_scale_
+                );
+                dt_segment[index] = std::clamp(
+                    dt_segment[index] * safe_scale,
+                    min_dt_,
+                    max_dt_
+                );
+            };
+
+        for (const auto &vio : report.vel_vios)
+            inflate_segment(vio.index, vio.ratio);
+
+        for (const auto &vio : report.acc_vios) {
+
+            const double scale = std::sqrt(vio.ratio);
+            inflate_segment(vio.index, scale);
+            inflate_segment(vio.index + 1, scale);
+        }
+
+        for (const auto &vio : report.jerk_vios) {
+
+            const double scale = std::cbrt(vio.ratio);
+            inflate_segment(vio.index, scale);
+            inflate_segment(vio.index + 1, scale);
+            inflate_segment(vio.index + 2, scale);
+        }
+    }
+
     /**
      * @brief 使用 B-Spline 二次规划平滑路径
      * @param p_ref 原始参考路径的坐标序列 (x 或 y)
@@ -151,12 +296,64 @@ namespace my_bspline_smoother {
         std::vector<double> &p_smooth_y
     ) {
 
-        //RCLCPP_INFO(node_->get_logger(), "BSpline算法启动");
-        int n = p_ref_x.size();
-        if (n < 4) return false;
-
         std::vector<double> dt_segment;
         computeTimeAllocation(p_ref_x, p_ref_y, dt_segment);
+
+        const int max_iterations = std::max(1, max_outer_iterations_);
+        for (int iter = 0; iter < max_iterations; ++ iter) {
+
+            if (!solveBSplineQPOnce(
+                    p_ref_x,
+                    p_ref_y,
+                    dt_segment,
+                    w_s,
+                    w_g,
+                    p_smooth_x,
+                    p_smooth_y))
+                return false;
+
+            const DynamicReport report = checkDynamicFeasibility(
+                p_smooth_x,
+                p_smooth_y,
+                dt_segment);
+
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "B-Spline dynamic check iter=%d ok=%d max_v=%.3f max_a=%.3f max_j=%.3f",
+                iter,
+                report.ok,
+                report.max_vel,
+                report.max_acc,
+                report.max_jerk);
+
+            if (report.ok)
+                return true;
+
+            if (iter + 1 < max_iterations)
+                inflateTimeAllocation(report, dt_segment);
+        }
+
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(),
+            *node_->get_clock(),
+            2000,
+            "B-Spline dynamic constraints remain violated after %d iterations",
+            max_iterations);
+        return !p_smooth_x.empty() && !p_smooth_y.empty();
+    }
+
+    bool MyBSplineSmoother::solveBSplineQPOnce(
+        const std::vector<double> &p_ref_x,
+        const std::vector<double> &p_ref_y,
+        const std::vector<double> &dt_segment,
+        double w_s,
+        double w_g,
+        std::vector<double> &p_smooth_x,
+        std::vector<double> &p_smooth_y
+    ) {
+
+        int n = p_ref_x.size();
+        if (n < 4 || static_cast<int>(dt_segment.size()) != n - 1) return false;
 
         Eigen::SparseMatrix<double> H(n, n);
         std::vector<Eigen::Triplet<double>> triplets;
