@@ -7,6 +7,7 @@
 #include <nav2_util/node_utils.hpp>
 #include <rclcpp/parameter_value.hpp>
 #include <vector>
+#include <visualization_msgs/msg/marker.hpp>
 
 extern "C" {
 #include "osqp/osqp.h"
@@ -40,6 +41,8 @@ namespace my_bspline_smoother {
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_min_half_width", rclcpp::ParameterValue(0.05));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_overlap_threshold", rclcpp::ParameterValue(0.8));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_collision_check_resolution", rclcpp::ParameterValue(0.03));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".visualize_corridor_boxes", rclcpp::ParameterValue(true));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_marker_z", rclcpp::ParameterValue(0.02));
 
         node_->get_parameter(name + ".w_smooth", w_smooth_);
         node_->get_parameter(name + ".w_guide", w_guide_);
@@ -55,10 +58,35 @@ namespace my_bspline_smoother {
         node_->get_parameter(name + ".corridor_min_half_width", corridor_min_half_width_);
         node_->get_parameter(name + ".corridor_overlap_threshold", corridor_overlap_threshold_);
         node_->get_parameter(name + ".corridor_collision_check_resolution", corridor_collision_check_resolution_);
+        node_->get_parameter(name + ".visualize_corridor_boxes", visualize_corridor_boxes_);
+        node_->get_parameter(name + ".corridor_marker_z", corridor_marker_z_);
+
+        corridor_marker_pub_ =
+            node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+                "~/corridor_boxes",
+                rclcpp::SystemDefaultsQoS());
     }
-    void MyBSplineSmoother::activate() { RCLCPP_INFO(node_->get_logger(), "插件已激活"); }
-    void MyBSplineSmoother::deactivate() { RCLCPP_INFO(node_->get_logger(), "插件已停用"); }
-    void MyBSplineSmoother::cleanup() { RCLCPP_INFO(node_->get_logger(), "插件已清理"); }
+    void MyBSplineSmoother::activate() {
+
+        if (corridor_marker_pub_)
+            corridor_marker_pub_->on_activate();
+
+        RCLCPP_INFO(node_->get_logger(), "插件已激活");
+    }
+
+    void MyBSplineSmoother::deactivate() {
+
+        if (corridor_marker_pub_)
+            corridor_marker_pub_->on_deactivate();
+
+        RCLCPP_INFO(node_->get_logger(), "插件已停用");
+    }
+
+    void MyBSplineSmoother::cleanup() {
+
+        corridor_marker_pub_.reset();
+        RCLCPP_INFO(node_->get_logger(), "插件已清理");
+    }
     bool MyBSplineSmoother::smooth(
         nav_msgs::msg::Path &path,
         const rclcpp::Duration &/*max_time*/
@@ -90,6 +118,7 @@ namespace my_bspline_smoother {
             ref_path_x.push_back(raw_path.poses[i].pose.position.x);
             ref_path_y.push_back(raw_path.poses[i].pose.position.y);
         }
+        path_frame_id_ = raw_path.header.frame_id.empty() ? "map" : raw_path.header.frame_id;
         solveBSplineQP(ref_path_x, ref_path_y, w_smooth_, w_guide_, smooth_path_x, smooth_path_y);
         int n = smooth_path_x.size();
         for (int i = 0; i < n; ++ i) {
@@ -559,6 +588,62 @@ namespace my_bspline_smoother {
         return bounds;
     }
 
+    void MyBSplineSmoother::publishCorridorMarkers(
+        const CorridorBounds &bounds,
+        const std::string &frame_id
+    ) const {
+
+        if (!visualize_corridor_boxes_ || !corridor_marker_pub_ ||
+            !corridor_marker_pub_->is_activated())
+            return;
+
+        const std::size_t n = bounds.lower_x.size();
+        if (bounds.upper_x.size() != n ||
+            bounds.lower_y.size() != n ||
+            bounds.upper_y.size() != n)
+            return;
+
+        visualization_msgs::msg::MarkerArray markers;
+
+        visualization_msgs::msg::Marker clear_marker;
+        clear_marker.header.frame_id = frame_id.empty() ? "map" : frame_id;
+        clear_marker.header.stamp = node_->now();
+        clear_marker.ns = "bspline_corridor_boxes";
+        clear_marker.id = 0;
+        clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+        markers.markers.push_back(clear_marker);
+
+        for (std::size_t i = 0; i < n; ++ i) {
+
+            const double width = bounds.upper_x[i] - bounds.lower_x[i];
+            const double height = bounds.upper_y[i] - bounds.lower_y[i];
+            if (width < 0.0 || height < 0.0)
+                continue;
+
+            visualization_msgs::msg::Marker marker;
+            marker.header.frame_id = clear_marker.header.frame_id;
+            marker.header.stamp = clear_marker.header.stamp;
+            marker.ns = "bspline_corridor_boxes";
+            marker.id = static_cast<int>(i + 1);
+            marker.type = visualization_msgs::msg::Marker::CUBE;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+            marker.pose.position.x = 0.5 * (bounds.lower_x[i] + bounds.upper_x[i]);
+            marker.pose.position.y = 0.5 * (bounds.lower_y[i] + bounds.upper_y[i]);
+            marker.pose.position.z = 0.5 * corridor_marker_z_;
+            marker.pose.orientation.w = 1.0;
+            marker.scale.x = std::max(width, 1e-3);
+            marker.scale.y = std::max(height, 1e-3);
+            marker.scale.z = std::max(corridor_marker_z_, 1e-3);
+            marker.color.r = 0.1F;
+            marker.color.g = 0.75F;
+            marker.color.b = 1.0F;
+            marker.color.a = 0.18F;
+            markers.markers.push_back(marker);
+        }
+
+        corridor_marker_pub_->publish(markers);
+    }
+
     bool MyBSplineSmoother::worldToMap(
         double wx,
         double wy,
@@ -647,6 +732,7 @@ namespace my_bspline_smoother {
         std::vector<double> dt_segment;
         computeTimeAllocation(p_ref_x, p_ref_y, dt_segment);
         const CorridorBounds bounds = buildCorridorBounds(p_ref_x, p_ref_y);
+        publishCorridorMarkers(bounds, path_frame_id_);
 
         const int max_iterations = std::max(1, max_outer_iterations_);
         for (int iter = 0; iter < max_iterations; ++ iter) {

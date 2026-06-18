@@ -13,6 +13,7 @@ find_package(nav2_util REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -38,6 +39,7 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   nav2_costmap_2d
   nav_msgs
   geometry_msgs
+  visualization_msgs
   pluginlib
   tf2
   tf2_ros
@@ -65,7 +67,7 @@ install(DIRECTORY include/
 # 导出依赖以供其他包使用
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_lib)
-ament_export_dependencies(nav2_core nav2_util pluginlib rclcpp)
+ament_export_dependencies(nav2_core nav2_util pluginlib rclcpp visualization_msgs)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

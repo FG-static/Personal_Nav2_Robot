@@ -15,6 +15,7 @@
 #include "nav2_util/lifecycle_node.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 namespace my_bspline_smoother {
 
@@ -179,6 +180,10 @@ namespace my_bspline_smoother {
             const std::vector<double> &p_ref_x,
             const std::vector<double> &p_ref_y
         ) const;
+        void publishCorridorMarkers(
+            const CorridorBounds &bounds,
+            const std::string &frame_id
+        ) const;
 
         // bspline参数
         double
@@ -196,7 +201,9 @@ namespace my_bspline_smoother {
             corridor_max_expand_dist_ = 0.8,
             corridor_min_half_width_ = 0.05,
             corridor_overlap_threshold_ = 0.8,
-            corridor_collision_check_resolution_ = 0.03;
+            corridor_collision_check_resolution_ = 0.03,
+            corridor_marker_z_ = 0.02;
+        bool visualize_corridor_boxes_ = true;
         unsigned char corridor_lethal_cost_threshold_ =
             nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
 
@@ -208,7 +215,10 @@ namespace my_bspline_smoother {
         };
         nav2_util::LifecycleNode::SharedPtr node_;
         std::string name_;
+        std::string path_frame_id_ = "map";
         std::shared_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_sub_;
+        rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+            corridor_marker_pub_;
     };
 } // my_bspline_smoother
 
