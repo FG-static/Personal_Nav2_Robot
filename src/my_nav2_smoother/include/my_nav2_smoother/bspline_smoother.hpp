@@ -167,7 +167,7 @@ namespace my_bspline_smoother {
             const GridBox &a,
             const GridBox &b
         ) const;
-        bool overlapRatio(
+        double overlapRatio(
             const GridBox &a,
             const GridBox &b
         ) const;

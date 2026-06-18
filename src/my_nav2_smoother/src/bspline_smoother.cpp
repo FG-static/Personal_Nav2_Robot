@@ -304,7 +304,7 @@ namespace my_bspline_smoother {
             bounds.upper_y.size() != p_x.size()) {
 
             report.ok = false;
-            report.point_vios.push_back({-1, 0.0});
+            report.point_vios.push_back({-1, 0.0, 0.0, 0.0});
             return report;
         }
 
@@ -345,7 +345,7 @@ namespace my_bspline_smoother {
 
                 report.ok = false;
                 const double distance = std::hypot(p_x[i + 1] - p_x[i], p_y[i + 1] - p_y[i]);
-                report.segment_vios.push_back({i, distance});
+                report.segment_vios.push_back({i, 0.0, 0.0, distance});
             }
         }
 
@@ -528,10 +528,10 @@ namespace my_bspline_smoother {
                 max_x,
                 max_y);
 
-            bounds.lower_x[i] = std::min(min_x, max_x);
-            bounds.upper_x[i] = std::max(min_x, max_x);
-            bounds.lower_y[i] = std::min(min_y, max_y);
-            bounds.upper_y[i] = std::max(min_y, max_y);
+            bounds.lower_x[i] = std::min(min_x, max_x) - 0.5 * resolution;
+            bounds.upper_x[i] = std::max(min_x, max_x) + 0.5 * resolution;
+            bounds.lower_y[i] = std::min(min_y, max_y) - 0.5 * resolution;
+            bounds.upper_y[i] = std::max(min_y, max_y) + 0.5 * resolution;
 
             if (bounds.upper_x[i] - bounds.lower_x[i] < 2.0 * corridor_min_half_width_) {
 
@@ -646,6 +646,7 @@ namespace my_bspline_smoother {
 
         std::vector<double> dt_segment;
         computeTimeAllocation(p_ref_x, p_ref_y, dt_segment);
+        const CorridorBounds bounds = buildCorridorBounds(p_ref_x, p_ref_y);
 
         const int max_iterations = std::max(1, max_outer_iterations_);
         for (int iter = 0; iter < max_iterations; ++ iter) {
@@ -654,39 +655,50 @@ namespace my_bspline_smoother {
                     p_ref_x,
                     p_ref_y,
                     dt_segment,
-                    CorridorBounds{},
+                    bounds,
                     w_s,
                     w_g,
                     p_smooth_x,
                     p_smooth_y))
                 return false;
 
-            const DynamicReport report = checkDynamicFeasibility(
-                p_smooth_x,
-                p_smooth_y,
-                dt_segment);
+            const DynamicReport dynamic_report =
+                checkDynamicFeasibility(
+                    p_smooth_x,
+                    p_smooth_y,
+                    dt_segment
+                );
+            const CorridorReport corridor_report =
+                checkCorridorFeasibility(
+                    p_smooth_x,
+                    p_smooth_y,
+                    bounds
+                );
 
             RCLCPP_DEBUG(
                 node_->get_logger(),
-                "B-Spline dynamic check iter=%d ok=%d max_v=%.3f max_a=%.3f max_j=%.3f",
+                "B-Spline check iter=%d dyn_ok=%d corridor_ok=%d max_v=%.3f max_a=%.3f max_j=%.3f point_vios=%zu segment_vios=%zu",
                 iter,
-                report.ok,
-                report.max_vel,
-                report.max_acc,
-                report.max_jerk);
+                dynamic_report.ok,
+                corridor_report.ok,
+                dynamic_report.max_vel,
+                dynamic_report.max_acc,
+                dynamic_report.max_jerk,
+                corridor_report.point_vios.size(),
+                corridor_report.segment_vios.size());
 
-            if (report.ok)
+            if (dynamic_report.ok && corridor_report.ok)
                 return true;
 
-            if (iter + 1 < max_iterations)
-                inflateTimeAllocation(report, dt_segment);
+            if (!dynamic_report.ok && iter + 1 < max_iterations)
+                inflateTimeAllocation(dynamic_report, dt_segment);
         }
 
         RCLCPP_WARN_THROTTLE(
             node_->get_logger(),
             *node_->get_clock(),
             2000,
-            "B-Spline dynamic constraints remain violated after %d iterations",
+            "B-Spline constraints remain violated after %d iterations",
             max_iterations);
         return !p_smooth_x.empty() && !p_smooth_y.empty();
     }
@@ -704,7 +716,11 @@ namespace my_bspline_smoother {
 
         int n = p_ref_x.size();
         if (n < 4 || static_cast<int>(dt_segment.size()) != n - 1) return false;
-        (void)bounds;
+        if (bounds.lower_x.size() != p_ref_x.size() ||
+            bounds.upper_x.size() != p_ref_x.size() ||
+            bounds.lower_y.size() != p_ref_x.size() ||
+            bounds.upper_y.size() != p_ref_x.size())
+            return false;
 
         Eigen::SparseMatrix<double> H(n, n);
         std::vector<Eigen::Triplet<double>> triplets;
@@ -745,17 +761,10 @@ namespace my_bspline_smoother {
         Eigen::VectorXd l_x(n), u_x(n), l_y(n), u_y(n);
         for (int i = 0; i < n; ++ i) {
 
-            l_x(i) = p_ref_x[i] - 1.0;
-            u_x(i) = p_ref_x[i] + 1.0;
-            l_y(i) = p_ref_y[i] - 1.0;
-            u_y(i) = p_ref_y[i] + 1.0;
-            if (i < 2 || i > n - 3) {
-
-                l_x(i) = p_ref_x[i];
-                u_x(i) = p_ref_x[i];
-                l_y(i) = p_ref_y[i];
-                u_y(i) = p_ref_y[i];
-            }
+            l_x(i) = bounds.lower_x[i];
+            u_x(i) = bounds.upper_x[i];
+            l_y(i) = bounds.lower_y[i];
+            u_y(i) = bounds.upper_y[i];
         }
 
         // OSQP求解
