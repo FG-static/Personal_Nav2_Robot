@@ -1,12 +1,12 @@
 #ifndef MY_NAV2_SMOOTHER__BSPLINE_SMOOTHER
 #define MY_NAV2_SMOOTHER__BSPLINE_SMOOTHER
 
+#include <nav2_costmap_2d/cost_values.hpp>
 #include <vector>
 #include <memory>
 #include <string>
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
-
 #include "nav2_costmap_2d/costmap_subscriber.hpp"
 #include "nav2_costmap_2d/footprint_subscriber.hpp"
 #include "nav2_core/smoother.hpp"
@@ -37,6 +37,41 @@ namespace my_bspline_smoother {
         std::vector<SegmentViolation> jerk_vios;
     };
 
+    struct CorridorBounds {
+
+        std::vector<double>
+            lower_x,
+            upper_x,
+            lower_y,
+            upper_y;
+    };
+
+    struct GridBox {
+
+        int min_mx = 0,
+            max_mx = 0,
+            min_my = 0,
+            max_my = 0;
+    };
+
+    struct CorridorViolation {
+
+        int index = -1;
+
+        double dx = 0.0;
+        double dy = 0.0;
+
+        double dist = 0.0;
+    };
+
+    struct CorridorReport {
+
+        bool ok = true;
+        std::vector<CorridorViolation>
+            point_vios,
+            segment_vios;
+    };
+
     class MyBSplineSmoother : public nav2_core::Smoother {
 
     public:
@@ -61,7 +96,10 @@ namespace my_bspline_smoother {
     private:
 
         // 平滑算法
-        void applyBSplineAlgorithm(nav_msgs::msg::Path &path, const nav_msgs::msg::Path &raw_path);
+        void applyBSplineAlgorithm(
+            nav_msgs::msg::Path &path,
+            const nav_msgs::msg::Path &raw_path
+        );
         bool solveBSplineQP(
             const std::vector<double> &p_ref_x,
             const std::vector<double> &p_ref_y,
@@ -73,6 +111,7 @@ namespace my_bspline_smoother {
             const std::vector<double> &p_ref_x,
             const std::vector<double> &p_ref_y,
             const std::vector<double> &dt_segment,
+            const CorridorBounds &bounds,
             double w_s,
             double w_g,
             std::vector<double> &p_smooth_x,
@@ -93,11 +132,53 @@ namespace my_bspline_smoother {
             const DynamicReport &report,
             std::vector<double> &dt_segment
         ) const;
-        // CorridorReport checkCorridorFeasibility(
-        //     const std::vector<double> &p_x,
-        //     const std::vector<double> &p_y,
-        //     const std::vector<double> &dt_segment
-        // ) const;
+
+        // 几何轨迹超调优化
+        bool worldToMap(
+            double wx,
+            double wy,
+            unsigned int &mx,
+            unsigned int &my
+        ) const;
+        bool isCellFree(int mx, int my) const;
+        bool isColumnFree(int mx, int min_my, int max_my) const;
+        bool isRowFree(int my, int min_mx, int max_mx) const;
+        GridBox expandBoxFromCell(
+            int seed_mx,
+            int seed_my,
+            int max_expand_cells
+        ) const;
+
+        // box处理
+        CorridorReport checkCorridorFeasibility(
+            const std::vector<double> &p_x,
+            const std::vector<double> &p_y,
+            const CorridorBounds &bounds
+        ) const;
+        bool isSegmentCollisionFree(
+            double x0, double y0,
+            double x1, double y1
+        ) const;
+        bool contains(
+            const GridBox &a,
+            const GridBox &b
+        ) const;
+        bool hasIntersection(
+            const GridBox &a,
+            const GridBox &b
+        ) const;
+        bool overlapRatio(
+            const GridBox &a,
+            const GridBox &b
+        ) const;
+        GridBox mergeByIntersection(
+            const GridBox &a,
+            const GridBox &b
+        ) const;
+        CorridorBounds buildCorridorBounds(
+            const std::vector<double> &p_ref_x,
+            const std::vector<double> &p_ref_y
+        ) const;
 
         // bspline参数
         double
@@ -111,6 +192,13 @@ namespace my_bspline_smoother {
             time_inflation_factor_ = 1.15,
             max_time_scale_ = 2.0;
         int max_outer_iterations_ = 3;
+        double
+            corridor_max_expand_dist_ = 0.8,
+            corridor_min_half_width_ = 0.05,
+            corridor_overlap_threshold_ = 0.8,
+            corridor_collision_check_resolution_ = 0.03;
+        unsigned char corridor_lethal_cost_threshold_ =
+            nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
 
         const double Q_data[4][4] = {
             { 0.333333, -0.500000,  0.000000,  0.166667},

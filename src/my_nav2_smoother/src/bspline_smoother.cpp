@@ -4,6 +4,7 @@
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include <algorithm>
 #include <cmath>
+#include <nav2_util/node_utils.hpp>
 #include <rclcpp/parameter_value.hpp>
 #include <vector>
 
@@ -35,6 +36,10 @@ namespace my_bspline_smoother {
         nav2_util::declare_parameter_if_not_declared(node_, name + ".max_outer_iterations", rclcpp::ParameterValue(3));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".time_inflation_factor", rclcpp::ParameterValue(1.15));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".max_time_scale", rclcpp::ParameterValue(2.0));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_max_expand_dist", rclcpp::ParameterValue(0.8));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_min_half_width", rclcpp::ParameterValue(0.05));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_overlap_threshold", rclcpp::ParameterValue(0.8));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_collision_check_resolution", rclcpp::ParameterValue(0.03));
 
         node_->get_parameter(name + ".w_smooth", w_smooth_);
         node_->get_parameter(name + ".w_guide", w_guide_);
@@ -46,6 +51,10 @@ namespace my_bspline_smoother {
         node_->get_parameter(name + ".max_outer_iterations", max_outer_iterations_);
         node_->get_parameter(name + ".time_inflation_factor", time_inflation_factor_);
         node_->get_parameter(name + ".max_time_scale", max_time_scale_);
+        node_->get_parameter(name + ".corridor_max_expand_dist", corridor_max_expand_dist_);
+        node_->get_parameter(name + ".corridor_min_half_width", corridor_min_half_width_);
+        node_->get_parameter(name + ".corridor_overlap_threshold", corridor_overlap_threshold_);
+        node_->get_parameter(name + ".corridor_collision_check_resolution", corridor_collision_check_resolution_);
     }
     void MyBSplineSmoother::activate() { RCLCPP_INFO(node_->get_logger(), "插件已激活"); }
     void MyBSplineSmoother::deactivate() { RCLCPP_INFO(node_->get_logger(), "插件已停用"); }
@@ -279,6 +288,345 @@ namespace my_bspline_smoother {
         }
     }
 
+    CorridorReport MyBSplineSmoother::checkCorridorFeasibility(
+        const std::vector<double> &p_x,
+        const std::vector<double> &p_y,
+        const CorridorBounds &bounds
+    ) const {
+
+        CorridorReport report;
+        const int n = static_cast<int>(p_x.size());
+        if (n == 0 ||
+            p_y.size() != p_x.size() ||
+            bounds.lower_x.size() != p_x.size() ||
+            bounds.upper_x.size() != p_x.size() ||
+            bounds.lower_y.size() != p_x.size() ||
+            bounds.upper_y.size() != p_x.size()) {
+
+            report.ok = false;
+            report.point_vios.push_back({-1, 0.0});
+            return report;
+        }
+
+        for (int i = 0; i < n; ++ i) {
+
+            double violation = 0.0, dx = 0.0, dy = 0.0;
+            if (p_x[i] < bounds.lower_x[i]) {
+
+                dx = p_x[i] - bounds.lower_x[i];
+                violation = std::max(violation, -dx);
+            }
+            if (p_x[i] > bounds.upper_x[i]) {
+
+                dx = p_x[i] - bounds.upper_x[i];
+                violation = std::max(violation, dx);
+            }
+            if (p_y[i] < bounds.lower_y[i]) {
+
+                dy = p_y[i] - bounds.lower_y[i];
+                violation = std::max(violation, -dy);
+            }
+            if (p_y[i] > bounds.upper_y[i]){
+
+                dy = p_y[i] - bounds.upper_y[i];
+                violation = std::max(violation, dy);
+            }
+
+            if (violation > 1e-6) {
+
+                report.ok = false;
+                report.point_vios.push_back({i, dx, dy, violation});
+            }
+        }
+
+        for (int i = 0; i + 1 < n; ++ i) {
+
+            if (!isSegmentCollisionFree(p_x[i], p_y[i], p_x[i + 1], p_y[i + 1])) {
+
+                report.ok = false;
+                const double distance = std::hypot(p_x[i + 1] - p_x[i], p_y[i + 1] - p_y[i]);
+                report.segment_vios.push_back({i, distance});
+            }
+        }
+
+        return report;
+    }
+
+    bool MyBSplineSmoother::isColumnFree(
+        int mx,
+        int min_my,
+        int max_my
+    ) const {
+
+        if (min_my > max_my)
+            return false;
+
+        for (int my = min_my; my <= max_my; ++ my)
+            if (!isCellFree(mx, my))
+                return false;
+
+        return true;
+    }
+
+    bool MyBSplineSmoother::isRowFree(
+        int my,
+        int min_mx,
+        int max_mx
+    ) const {
+
+        if (min_mx > max_mx)
+            return false;
+
+        for (int mx = min_mx; mx <= max_mx; ++ mx)
+            if (!isCellFree(mx, my))
+                return false;
+
+        return true;
+    }
+
+    GridBox MyBSplineSmoother::expandBoxFromCell(
+        int seed_mx,
+        int seed_my,
+        int max_expand_cells
+    ) const {
+
+        GridBox box;
+        box.min_mx = seed_mx;
+        box.max_mx = seed_mx;
+        box.min_my = seed_my;
+        box.max_my = seed_my;
+
+        if (!isCellFree(seed_mx, seed_my)) return box;
+
+        bool expanded = true;
+        while (expanded) {
+
+            expanded = false;
+
+            if (box.max_mx - seed_mx < max_expand_cells &&
+                isColumnFree(box.max_mx + 1, box.min_my, box.max_my)) {
+
+                ++ box.max_mx;
+                expanded = true;
+            }
+
+            if (seed_mx - box.min_mx < max_expand_cells &&
+                isColumnFree(box.min_mx - 1, box.min_my, box.max_my)) {
+
+                -- box.min_mx;
+                expanded = true;
+            }
+
+            if (box.max_my - seed_my < max_expand_cells &&
+                isRowFree(box.max_my + 1, box.min_mx, box.max_mx)) {
+
+                ++ box.max_my;
+                expanded = true;
+            }
+
+            if (seed_my - box.min_my < max_expand_cells &&
+                isRowFree(box.min_my - 1, box.min_mx, box.max_mx)) {
+
+                -- box.min_my;
+                expanded = true;
+            }
+        }
+        return box;
+    }
+
+    CorridorBounds MyBSplineSmoother::buildCorridorBounds(
+        const std::vector<double> &p_ref_x,
+        const std::vector<double> &p_ref_y
+    ) const {
+
+        CorridorBounds bounds;
+
+        const int n = static_cast<int>(p_ref_x.size());
+        bounds.lower_x.resize(n);
+        bounds.upper_x.resize(n);
+        bounds.lower_y.resize(n);
+        bounds.upper_y.resize(n);
+
+        auto setFallbackCorridorBounds =
+            [&](
+                int index,
+                const std::vector<double> &p_ref_x,
+                const std::vector<double> &p_ref_y,
+                CorridorBounds &bounds
+            ) {
+
+                bounds.lower_x[index] = p_ref_x[index] - corridor_min_half_width_;
+                bounds.upper_x[index] = p_ref_x[index] + corridor_min_half_width_;
+                bounds.lower_y[index] = p_ref_y[index] - corridor_min_half_width_;
+                bounds.upper_y[index] = p_ref_y[index] + corridor_min_half_width_;
+            };
+
+        if (n == 0 || p_ref_x.size() != p_ref_y.size())
+            return bounds;
+
+        if (!costmap_sub_) {
+
+            for (int i = 0; i < n; ++ i)
+                setFallbackCorridorBounds(
+                    i,
+                    p_ref_x,
+                    p_ref_y,
+                    bounds
+                );
+            return bounds;
+        }
+        auto costmap = costmap_sub_->getCostmap();
+        if (!costmap) {
+
+            for (int i = 0; i < n; ++ i)
+                setFallbackCorridorBounds(
+                    i,
+                    p_ref_x,
+                    p_ref_y,
+                    bounds
+                );
+            return bounds;
+        }
+
+        const double resolution = std::max(costmap->getResolution(), 1e-3);
+        const int max_expand_cells = std::max(
+            1,
+            static_cast<int>(
+                std::ceil(corridor_max_expand_dist_ / resolution)
+            )
+        );
+        for (int i = 0; i < n; ++ i) {
+
+            unsigned int mx = 0, my = 0;
+            if (!worldToMap(p_ref_x[i], p_ref_y[i], mx, my) ||
+                !isCellFree(static_cast<int>(mx), static_cast<int>(my))) {
+
+                setFallbackCorridorBounds(i, p_ref_x, p_ref_y, bounds);
+                continue;
+            }
+
+            const GridBox box = expandBoxFromCell(
+                static_cast<int>(mx),
+                static_cast<int>(my),
+                max_expand_cells
+            );
+
+            double min_x = 0.0;
+            double min_y = 0.0;
+            double max_x = 0.0;
+            double max_y = 0.0;
+
+            costmap->mapToWorld(
+                static_cast<unsigned int>(box.min_mx),
+                static_cast<unsigned int>(box.min_my),
+                min_x,
+                min_y);
+
+            costmap->mapToWorld(
+                static_cast<unsigned int>(box.max_mx),
+                static_cast<unsigned int>(box.max_my),
+                max_x,
+                max_y);
+
+            bounds.lower_x[i] = std::min(min_x, max_x);
+            bounds.upper_x[i] = std::max(min_x, max_x);
+            bounds.lower_y[i] = std::min(min_y, max_y);
+            bounds.upper_y[i] = std::max(min_y, max_y);
+
+            if (bounds.upper_x[i] - bounds.lower_x[i] < 2.0 * corridor_min_half_width_) {
+
+                bounds.lower_x[i] = p_ref_x[i] - corridor_min_half_width_;
+                bounds.upper_x[i] = p_ref_x[i] + corridor_min_half_width_;
+            }
+
+            if (bounds.upper_y[i] - bounds.lower_y[i] < 2.0 * corridor_min_half_width_) {
+
+                bounds.lower_y[i] = p_ref_y[i] - corridor_min_half_width_;
+                bounds.upper_y[i] = p_ref_y[i] + corridor_min_half_width_;
+            }
+        }
+        for (int i = 0; i < n; ++ i) {
+
+            if (i < 2 || i > n - 3) {
+
+                bounds.lower_x[i] = p_ref_x[i];
+                bounds.upper_x[i] = p_ref_x[i];
+                bounds.lower_y[i] = p_ref_y[i];
+                bounds.upper_y[i] = p_ref_y[i];
+            }
+        }
+
+        return bounds;
+    }
+
+    bool MyBSplineSmoother::worldToMap(
+        double wx,
+        double wy,
+        unsigned int &mx,
+        unsigned int &my
+    ) const {
+
+        if (!costmap_sub_)
+            return false;
+
+        auto costmap = costmap_sub_->getCostmap();
+        if (!costmap)
+            return false;
+
+        return costmap->worldToMap(wx, wy, mx, my);
+    }
+
+    bool MyBSplineSmoother::isCellFree(int mx, int my) const {
+
+        if (!costmap_sub_ || mx < 0 || my < 0)
+            return false;
+
+        auto costmap = costmap_sub_->getCostmap();
+        if (!costmap)
+            return false;
+
+        const auto umx = static_cast<unsigned int>(mx);
+        const auto umy = static_cast<unsigned int>(my);
+        if (umx >= costmap->getSizeInCellsX() || umy >= costmap->getSizeInCellsY())
+            return false;
+
+        const unsigned char cost = costmap->getCost(umx, umy);
+        if (cost == nav2_costmap_2d::NO_INFORMATION)
+            return false;
+
+        return cost < corridor_lethal_cost_threshold_;
+    }
+
+    bool MyBSplineSmoother::isSegmentCollisionFree(
+        double x0,
+        double y0,
+        double x1,
+        double y1
+    ) const {
+
+        const double dx = x1 - x0;
+        const double dy = y1 - y0;
+        const double length = std::hypot(dx, dy);
+        const double step = std::max(corridor_collision_check_resolution_, 1e-3);
+        const int steps = std::max(1, static_cast<int>(std::ceil(length / step)));
+
+        for (int i = 0; i <= steps; ++ i) {
+
+            const double ratio = static_cast<double>(i) / static_cast<double>(steps);
+            const double x = x0 + ratio * dx;
+            const double y = y0 + ratio * dy;
+
+            unsigned int mx = 0;
+            unsigned int my = 0;
+            if (!worldToMap(x, y, mx, my))
+                return false;
+            if (!isCellFree(static_cast<int>(mx), static_cast<int>(my)))
+                return false;
+        }
+
+        return true;
+    }
+
     /**
      * @brief 使用 B-Spline 二次规划平滑路径
      * @param p_ref 原始参考路径的坐标序列 (x 或 y)
@@ -306,6 +654,7 @@ namespace my_bspline_smoother {
                     p_ref_x,
                     p_ref_y,
                     dt_segment,
+                    CorridorBounds{},
                     w_s,
                     w_g,
                     p_smooth_x,
@@ -346,6 +695,7 @@ namespace my_bspline_smoother {
         const std::vector<double> &p_ref_x,
         const std::vector<double> &p_ref_y,
         const std::vector<double> &dt_segment,
+        const CorridorBounds &bounds,
         double w_s,
         double w_g,
         std::vector<double> &p_smooth_x,
@@ -354,6 +704,7 @@ namespace my_bspline_smoother {
 
         int n = p_ref_x.size();
         if (n < 4 || static_cast<int>(dt_segment.size()) != n - 1) return false;
+        (void)bounds;
 
         Eigen::SparseMatrix<double> H(n, n);
         std::vector<Eigen::Triplet<double>> triplets;
