@@ -3,6 +3,7 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <nav2_util/node_utils.hpp>
 #include <rclcpp/parameter_value.hpp>
@@ -43,6 +44,8 @@ namespace my_bspline_smoother {
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_collision_check_resolution", rclcpp::ParameterValue(0.03));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".visualize_corridor_boxes", rclcpp::ParameterValue(true));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_marker_z", rclcpp::ParameterValue(0.02));
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name + ".max_overshoot_constraints_per_iter", rclcpp::ParameterValue(20));
 
         node_->get_parameter(name + ".w_smooth", w_smooth_);
         node_->get_parameter(name + ".w_guide", w_guide_);
@@ -60,6 +63,7 @@ namespace my_bspline_smoother {
         node_->get_parameter(name + ".corridor_collision_check_resolution", corridor_collision_check_resolution_);
         node_->get_parameter(name + ".visualize_corridor_boxes", visualize_corridor_boxes_);
         node_->get_parameter(name + ".corridor_marker_z", corridor_marker_z_);
+        node_->get_parameter(name + ".max_overshoot_constraints_per_iter", max_overshoot_constraints_per_iter_);
 
         corridor_marker_pub_ =
             node_->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -588,6 +592,65 @@ namespace my_bspline_smoother {
         return bounds;
     }
 
+    // TODO：Understanf it
+    std::vector<GridBox> MyBSplineSmoother::buildSegmentCorridorBoxes(
+        const std::vector<double> &p_ref_x,
+        const std::vector<double> &p_ref_y
+    ) const {
+
+        std::vector<GridBox> boxes;
+        if (p_ref_x.size() != p_ref_y.size() || p_ref_x.size() < 4)
+            return boxes;
+
+        const int segment_count = static_cast<int>(p_ref_x.size()) - 3;
+        boxes.reserve(segment_count);
+
+        if (!costmap_sub_)
+            return boxes;
+
+        auto costmap = costmap_sub_->getCostmap();
+        if (!costmap)
+            return boxes;
+
+        const double resolution = std::max(costmap->getResolution(), 1e-3);
+        const int max_expand_cells = std::max(
+            1,
+            static_cast<int>(std::ceil(corridor_max_expand_dist_ / resolution))
+        );
+
+        for (int segment = 0; segment < segment_count; ++ segment) {
+
+            // First version: use an interior reference point as the segment's corridor seed.
+            const int seed_index = std::clamp(
+                segment + 1,
+                0,
+                static_cast<int>(p_ref_x.size()) - 1
+            );
+
+            unsigned int mx = 0;
+            unsigned int my = 0;
+            if (!worldToMap(p_ref_x[seed_index], p_ref_y[seed_index], mx, my) ||
+                !isCellFree(static_cast<int>(mx), static_cast<int>(my))) {
+
+                boxes.push_back(GridBox{
+                    static_cast<int>(mx),
+                    static_cast<int>(mx),
+                    static_cast<int>(my),
+                    static_cast<int>(my)
+                });
+                continue;
+            }
+
+            boxes.push_back(expandBoxFromCell(
+                static_cast<int>(mx),
+                static_cast<int>(my),
+                max_expand_cells
+            ));
+        }
+
+        return boxes;
+    }
+
     void MyBSplineSmoother::publishCorridorMarkers(
         const CorridorBounds &bounds,
         const std::string &frame_id
@@ -712,6 +775,309 @@ namespace my_bspline_smoother {
         return true;
     }
 
+    std::array<double, 4> MyBSplineSmoother::cubicBSplineBasis(double u) const {
+
+        u = std::clamp(u, 0.0, 1.0);
+        const double u2 = u * u;
+        const double u3 = u2 * u;
+
+        return {
+            (1.0 - 3.0 * u + 3.0 * u2 - u3) / 6.0,
+            (4.0 - 6.0 * u2 + 3.0 * u3) / 6.0,
+            (1.0 + 3.0 * u + 3.0 * u2 - 3.0 * u3) / 6.0,
+            u3 / 6.0
+        };
+    }
+
+    std::array<double, 4> MyBSplineSmoother::cubicBSplineBasisDerivative(
+        double u
+    ) const {
+
+        u = std::clamp(u, 0.0, 1.0);
+        const double u2 = u * u;
+
+        return {
+            (-3.0 + 6.0 * u - 3.0 * u2) / 6.0,
+            (-12.0 * u + 9.0 * u2) / 6.0,
+            (3.0 + 6.0 * u - 9.0 * u2) / 6.0,
+            u2 / 2.0
+        };
+    }
+
+    Eigen::Vector2d MyBSplineSmoother::evaluateSplinePoint(
+        const std::vector<double> &p_x,
+        const std::vector<double> &p_y,
+        int segment_index,
+        double u
+    ) const {
+
+        if (segment_index < 0 ||
+            segment_index + 3 >= static_cast<int>(p_x.size()) ||
+            p_x.size() != p_y.size())
+            return Eigen::Vector2d::Zero();
+
+        const auto basis = cubicBSplineBasis(u);
+
+        double x = 0.0;
+        double y = 0.0;
+        for (int i = 0; i < 4; ++ i) {
+
+            x += basis[i] * p_x[segment_index + i];
+            y += basis[i] * p_y[segment_index + i];
+        }
+
+        return Eigen::Vector2d(x, y);
+    }
+
+    SplineOvershootReport MyBSplineSmoother::checkSplineOvershootByExtrema(
+        const std::vector<double> &p_x,
+        const std::vector<double> &p_y,
+        const std::vector<GridBox> &segment_boxes
+    ) const {
+
+        SplineOvershootReport report;
+
+        if (!costmap_sub_ || p_x.size() != p_y.size() || p_x.size() < 4) {
+
+            report.ok = false;
+            return report;
+        }
+
+        auto costmap = costmap_sub_->getCostmap();
+        if (!costmap) {
+
+            report.ok = false;
+            return report;
+        }
+
+        const int segment_count = static_cast<int>(p_x.size()) - 3;
+        if (static_cast<int>(segment_boxes.size()) < segment_count) {
+
+            report.ok = false;
+            return report;
+        }
+
+        const double resolution = std::max(costmap->getResolution(), 1e-3);
+
+        for (int seg = 0; seg < segment_count; ++ seg) {
+
+            std::vector<double> candidates = {0.0, 1.0};
+
+            const auto x_extrema = findSplineExtremaU(p_x, seg);
+            candidates.insert(candidates.end(), x_extrema.begin(), x_extrema.end());
+            const auto y_extrema = findSplineExtremaU(p_y, seg);
+            candidates.insert(candidates.end(), y_extrema.begin(), y_extrema.end());
+
+            const GridBox box = segment_boxes[seg];
+
+            double min_x = 0.0;
+            double min_y = 0.0;
+            double max_x = 0.0;
+            double max_y = 0.0;
+
+            costmap->mapToWorld(
+                static_cast<unsigned int>(box.min_mx),
+                static_cast<unsigned int>(box.min_my),
+                min_x, min_y
+            );
+            costmap->mapToWorld(
+                static_cast<unsigned int>(box.max_mx),
+                static_cast<unsigned int>(box.max_my),
+                max_x, max_y
+            );
+            const double lower_x = std::min(min_x, max_x) - 0.5 * resolution;
+            const double upper_x = std::max(min_x, max_x) + 0.5 * resolution;
+            const double lower_y = std::min(min_y, max_y) - 0.5 * resolution;
+            const double upper_y = std::max(min_y, max_y) + 0.5 * resolution;
+
+            for (const double u : candidates) {
+
+                const Eigen::Vector2d point =
+                    evaluateSplinePoint(p_x, p_y, seg, u);
+
+                double dx = 0.0;
+                double dy = 0.0;
+
+                if (point.x() < lower_x)
+                    dx = point.x() - lower_x;
+                else if (point.x() > upper_x)
+                    dx = point.x() - upper_x;
+
+                if (point.y() < lower_y)
+                    dy = point.y() - lower_y;
+                else if (point.y() > upper_y)
+                    dy = point.y() - upper_y;
+
+                if (std::abs(dx) > 1e-6 || std::abs(dy) > 1e-6) {
+
+                    report.ok = false;
+                    report.overshoots.push_back({
+                        seg,
+                        u,
+                        point.x(),
+                        point.y(),
+                        dx,
+                        dy
+                    });
+                }
+            }
+        }
+        return report;
+    }
+
+    std::vector<double> MyBSplineSmoother::findSplineExtremaU(
+        const std::vector<double> &p,
+        int segment_index
+    ) const {
+
+        std::vector<double> roots;
+
+        if (segment_index < 0 ||
+            segment_index + 3 >= static_cast<int>(p.size())) {
+            return roots;
+        }
+
+        const double p0 = p[segment_index];
+        const double p1 = p[segment_index + 1];
+        const double p2 = p[segment_index + 2];
+        const double p3 = p[segment_index + 3];
+
+        // dp/du = a*u^2 + b*u + c
+        const double a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+        const double b = p0 - 2.0 * p1 + p2;
+        const double c = -0.5 * p0 + 0.5 * p2;
+
+        constexpr double eps = 1e-9; // 作0判断
+
+        auto addRoot = [&](double u) {
+
+            if (u <= eps || u >= 1.0 - eps)
+                return;
+
+            for (double existing : roots)
+                if (std::abs(existing - u) < 1e-6)
+                    return;
+
+            roots.push_back(u);
+        };
+
+        if (std::abs(a) < eps) {
+
+            if (std::abs(b) > eps)
+                addRoot(-c / b);
+            return roots;
+        }
+
+        const double delta = b * b - 4.0 * a * c;
+        if (delta < -eps) return roots;
+
+        const double sqrt_d = std::sqrt(std::max(0.0, delta));
+
+        if (std::abs(sqrt_d) < eps) {
+
+            addRoot(-b / (2.0 * a));
+            return roots;
+        }
+
+        // x = -2c / (b + sgn(b) * sqrt(b^2 − 4ac))
+        auto sgn = [&](double x) {
+
+            if (x == 0.0) return 0.0;
+            return (x > 0 ? 1.0 : -1.0);
+        };
+        const double q = -0.5 * (b + sgn(b) * sqrt_d);
+
+        if (std::abs(q) < eps) {
+
+            addRoot(-b / (2.0 * a));
+            return roots;
+        }
+
+        addRoot(q / a);
+        addRoot(c / q);
+
+        return roots;
+    }
+
+    /**
+     * @brief 在轨迹超调位置生成约束并添加到额外约束列表中
+     * @param report 超调报告
+     * @param segment_boxes 轨迹段的网格框列表
+     * @param extra_constraints 额外约束列表
+     * @return void
+     */
+    void MyBSplineSmoother::appendOvershootConstraints(
+        const SplineOvershootReport &report,
+        const std::vector<GridBox> &segment_boxes,
+        std::vector<SplinePointConstraint> &extra_constraints
+    ) const {
+
+        if (!costmap_sub_)
+            return;
+
+        auto costmap = costmap_sub_->getCostmap();
+        if (!costmap)
+            return;
+
+        const double resolution = std::max(costmap->getResolution(), 1e-3);
+        int added_count = 0;
+        const int max_added_count = std::max(0, max_overshoot_constraints_per_iter_);
+
+        for (const auto &overshoot : report.overshoots) {
+
+            if (added_count >= max_added_count)
+                break;
+
+            if (overshoot.segment_index < 0 ||
+                overshoot.segment_index >= static_cast<int>(segment_boxes.size()))
+                continue;
+
+            bool duplicated = false;
+            for (const auto &existing : extra_constraints) { // 防止多重相同约束
+
+                if (existing.segment_index == overshoot.segment_index &&
+                    std::abs(existing.u - overshoot.u) < 1e-3) {
+
+                    duplicated = true;
+                    break;
+                }
+            }
+
+            if (duplicated)
+                continue;
+
+            const GridBox &box = segment_boxes[overshoot.segment_index];
+
+            double min_x = 0.0;
+            double min_y = 0.0;
+            double max_x = 0.0;
+            double max_y = 0.0;
+
+            costmap->mapToWorld(
+                static_cast<unsigned int>(box.min_mx),
+                static_cast<unsigned int>(box.min_my),
+                min_x,
+                min_y);
+
+            costmap->mapToWorld(
+                static_cast<unsigned int>(box.max_mx),
+                static_cast<unsigned int>(box.max_my),
+                max_x,
+                max_y);
+
+            SplinePointConstraint constraint;
+            constraint.segment_index = overshoot.segment_index;
+            constraint.u = overshoot.u;
+            constraint.lower_x = std::min(min_x, max_x) - 0.5 * resolution;
+            constraint.upper_x = std::max(min_x, max_x) + 0.5 * resolution;
+            constraint.lower_y = std::min(min_y, max_y) - 0.5 * resolution;
+            constraint.upper_y = std::max(min_y, max_y) + 0.5 * resolution;
+
+            extra_constraints.push_back(constraint);
+            ++ added_count;
+        }
+    }
+
     /**
      * @brief 使用 B-Spline 二次规划平滑路径
      * @param p_ref 原始参考路径的坐标序列 (x 或 y)
@@ -732,7 +1098,10 @@ namespace my_bspline_smoother {
         std::vector<double> dt_segment;
         computeTimeAllocation(p_ref_x, p_ref_y, dt_segment);
         const CorridorBounds bounds = buildCorridorBounds(p_ref_x, p_ref_y);
+        const std::vector<GridBox> segment_boxes =
+            buildSegmentCorridorBoxes(p_ref_x, p_ref_y);
         publishCorridorMarkers(bounds, path_frame_id_);
+        std::vector<SplinePointConstraint> extra_constraints;
 
         const int max_iterations = std::max(1, max_outer_iterations_);
         for (int iter = 0; iter < max_iterations; ++ iter) {
@@ -742,6 +1111,7 @@ namespace my_bspline_smoother {
                     p_ref_y,
                     dt_segment,
                     bounds,
+                    extra_constraints,
                     w_s,
                     w_g,
                     p_smooth_x,
@@ -760,24 +1130,46 @@ namespace my_bspline_smoother {
                     p_smooth_y,
                     bounds
                 );
+            SplineOvershootReport overshoot_report;
+            const int segment_count = static_cast<int>(p_smooth_x.size()) - 3;
+            if (segment_count > 0 &&
+                static_cast<int>(segment_boxes.size()) >= segment_count) {
+
+                overshoot_report =
+                    checkSplineOvershootByExtrema(
+                        p_smooth_x,
+                        p_smooth_y,
+                        segment_boxes
+                    );
+            }
 
             RCLCPP_DEBUG(
                 node_->get_logger(),
-                "B-Spline check iter=%d dyn_ok=%d corridor_ok=%d max_v=%.3f max_a=%.3f max_j=%.3f point_vios=%zu segment_vios=%zu",
+                "B-Spline check iter=%d dyn_ok=%d corridor_ok=%d overshoot_ok=%d max_v=%.3f max_a=%.3f max_j=%.3f point_vios=%zu segment_vios=%zu overshoots=%zu extra_constraints=%zu",
                 iter,
                 dynamic_report.ok,
                 corridor_report.ok,
+                overshoot_report.ok,
                 dynamic_report.max_vel,
                 dynamic_report.max_acc,
                 dynamic_report.max_jerk,
                 corridor_report.point_vios.size(),
-                corridor_report.segment_vios.size());
+                corridor_report.segment_vios.size(),
+                overshoot_report.overshoots.size(),
+                extra_constraints.size());
 
-            if (dynamic_report.ok && corridor_report.ok)
+            if (dynamic_report.ok && corridor_report.ok && overshoot_report.ok)
                 return true;
 
             if (!dynamic_report.ok && iter + 1 < max_iterations)
                 inflateTimeAllocation(dynamic_report, dt_segment);
+
+            if (!overshoot_report.ok && iter + 1 < max_iterations)
+                appendOvershootConstraints(
+                    overshoot_report,
+                    segment_boxes,
+                    extra_constraints
+                );
         }
 
         RCLCPP_WARN_THROTTLE(
@@ -794,6 +1186,7 @@ namespace my_bspline_smoother {
         const std::vector<double> &p_ref_y,
         const std::vector<double> &dt_segment,
         const CorridorBounds &bounds,
+        const std::vector<SplinePointConstraint> &extra_constraints,
         double w_s,
         double w_g,
         std::vector<double> &p_smooth_x,
@@ -843,8 +1236,12 @@ namespace my_bspline_smoother {
             f_y(i) = -w_g * p_ref_y[i];
         } // f_{QP}
 
+        const int constraint_count =
+            n + static_cast<int>(extra_constraints.size());
+
         // 边界约束
-        Eigen::VectorXd l_x(n), u_x(n), l_y(n), u_y(n);
+        Eigen::VectorXd l_x(constraint_count), u_x(constraint_count);
+        Eigen::VectorXd l_y(constraint_count), u_y(constraint_count);
         for (int i = 0; i < n; ++ i) {
 
             l_x(i) = bounds.lower_x[i];
@@ -853,17 +1250,49 @@ namespace my_bspline_smoother {
             u_y(i) = bounds.upper_y[i];
         }
 
+        for (std::size_t k = 0; k < extra_constraints.size(); ++ k) {
+
+            const auto &constraint = extra_constraints[k];
+            const int row = n + static_cast<int>(k);
+            l_x(row) = constraint.lower_x;
+            u_x(row) = constraint.upper_x;
+            l_y(row) = constraint.lower_y;
+            u_y(row) = constraint.upper_y;
+        }
+
         // OSQP求解
         OSQPSettings *settings = (OSQPSettings*)c_malloc(sizeof(OSQPSettings));
         OSQPData *data = (OSQPData*)c_malloc(sizeof(OSQPData));
         Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> H_csc = H.triangularView<Eigen::Upper>(); // csc形式
-        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> A_csc(n, n);
-        A_csc.setIdentity();
+        Eigen::SparseMatrix<c_float, Eigen::ColMajor, c_int> A_csc(constraint_count, n);
+        std::vector<Eigen::Triplet<c_float>> a_triplets;
+        a_triplets.reserve(n + 4 * extra_constraints.size());
+        for (int i = 0; i < n; ++ i)
+            a_triplets.push_back(Eigen::Triplet<c_float>(i, i, 1.0));
+
+        for (std::size_t k = 0; k < extra_constraints.size(); ++ k) {
+
+            const auto &constraint = extra_constraints[k];
+            const int segment_index = constraint.segment_index;
+            if (segment_index < 0 || segment_index + 3 >= n)
+                continue;
+
+            const int row = n + static_cast<int>(k);
+            const auto basis = cubicBSplineBasis(constraint.u);
+            for (int j = 0; j < 4; ++ j) {
+
+                a_triplets.push_back(Eigen::Triplet<c_float>(
+                    row,
+                    segment_index + j,
+                    static_cast<c_float>(basis[j])));
+            }
+        }
+        A_csc.setFromTriplets(a_triplets.begin(), a_triplets.end());
         A_csc.makeCompressed();
         H_csc.makeCompressed();
 
         data->n = n; // 变量
-        data->m = n; // 约束
+        data->m = constraint_count; // 约束
         data->P = csc_matrix( // csc矩阵信息
             n, n,
             H_csc.nonZeros(),
@@ -873,7 +1302,7 @@ namespace my_bspline_smoother {
         );
         data->q = f_x.data(); // 一次项
         data->A = csc_matrix( // 约束矩阵
-            n, n,
+            constraint_count, n,
             A_csc.nonZeros(),
             A_csc.valuePtr(),
             (c_int*)A_csc.innerIndexPtr(),

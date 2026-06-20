@@ -1,6 +1,7 @@
 #ifndef MY_NAV2_SMOOTHER__BSPLINE_SMOOTHER
 #define MY_NAV2_SMOOTHER__BSPLINE_SMOOTHER
 
+#include <array>
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <vector>
 #include <memory>
@@ -73,6 +74,32 @@ namespace my_bspline_smoother {
             segment_vios;
     };
 
+    struct SplinePointConstraint{
+
+        int segment_index = -1;
+        double u = 0.0;
+        double lower_x = 0.0;
+        double upper_x = 0.0;
+        double lower_y = 0.0;
+        double upper_y = 0.0;
+    };
+
+    struct SplineOvershoot {
+
+        int segment_index = -1;
+        double u = 0.0;
+        double x = 0.0;
+        double y = 0.0;
+        double dx = 0.0;
+        double dy = 0.0;
+    };
+
+    struct SplineOvershootReport {
+
+        bool ok = true;
+        std::vector<SplineOvershoot> overshoots;
+    };
+
     class MyBSplineSmoother : public nav2_core::Smoother {
 
     public:
@@ -113,6 +140,7 @@ namespace my_bspline_smoother {
             const std::vector<double> &p_ref_y,
             const std::vector<double> &dt_segment,
             const CorridorBounds &bounds,
+            const std::vector<SplinePointConstraint> &extra_constraints,
             double w_s,
             double w_g,
             std::vector<double> &p_smooth_x,
@@ -180,9 +208,37 @@ namespace my_bspline_smoother {
             const std::vector<double> &p_ref_x,
             const std::vector<double> &p_ref_y
         ) const;
+        std::vector<GridBox> buildSegmentCorridorBoxes(
+            const std::vector<double> &p_ref_x,
+            const std::vector<double> &p_ref_y
+        ) const;
         void publishCorridorMarkers(
             const CorridorBounds &bounds,
             const std::string &frame_id
+        ) const;
+
+        std::array<double, 4> cubicBSplineBasis(double u) const;
+        std::array<double, 4> cubicBSplineBasisDerivative(double u) const;
+        Eigen::Vector2d evaluateSplinePoint(
+            const std::vector<double> &p_x,
+            const std::vector<double> &p_y,
+            int segment_index,
+            double u
+        ) const;
+
+        SplineOvershootReport checkSplineOvershootByExtrema(
+            const std::vector<double> &p_x,
+            const std::vector<double> &p_y,
+            const std::vector<GridBox> &segment_boxes
+        ) const;
+        std::vector<double> findSplineExtremaU( // solve an fomulation
+            const std::vector<double> &p,
+            int segment_index
+        ) const;
+        void appendOvershootConstraints(
+            const SplineOvershootReport &report,
+            const std::vector<GridBox> &segment_boxes,
+            std::vector<SplinePointConstraint> &extra_constraints
         ) const;
 
         // bspline参数
@@ -203,6 +259,7 @@ namespace my_bspline_smoother {
             corridor_overlap_threshold_ = 0.8,
             corridor_collision_check_resolution_ = 0.03,
             corridor_marker_z_ = 0.02;
+        int max_overshoot_constraints_per_iter_ = 20;
         bool visualize_corridor_boxes_ = true;
         unsigned char corridor_lethal_cost_threshold_ =
             nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;

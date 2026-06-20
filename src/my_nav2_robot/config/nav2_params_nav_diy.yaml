@@ -264,11 +264,11 @@ planner_server:
       collision_check_resolution: 0.02
       max_iterations_after_goal: 1000
       # A*  1ms
-      plugin: "my_nav2_planner/MyAStarPlanner"
+      #plugin: "my_nav2_planner/MyAStarPlanner"
       unknown_cost: 5.0
       interpolation_resolution: 0.1
       # Hybrid A*
-      #plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
+      plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       primitive_duration: 0.2
       step_time: 0.05
       yaw_bin_count: 96 # 朝向离散桶数
@@ -288,6 +288,13 @@ smoother_server:
       plugin: "my_bspline_smoother/MyBSplineSmoother"
       w_smooth: 20.0
       w_guide: 0.3
+      max_outer_iterations: 4
+      corridor_max_expand_dist: 0.8
+      corridor_min_half_width: 0.05
+      corridor_collision_check_resolution: 0.03
+      visualize_corridor_boxes: true
+      corridor_marker_z: 0.02
+      max_overshoot_constraints_per_iter: 20
 
 behavior_server:
   ros__parameters:
