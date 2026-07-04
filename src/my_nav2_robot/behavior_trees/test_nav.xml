@@ -22,7 +22,8 @@
         </RateController>
         <ManageTrajectory input_path="{candidate_path}"
                           output_path="{path}"
-                          goal="{goal}"/>
+                          goal="{goal}"
+                          replan_event_topic="trajectory_generation/replan_event"/>
         <FollowPath path="{path}"
                     controller_id="FollowPath"/>
       </PipelineSequence>
@@ -68,6 +69,7 @@
       <input_port name="input_path"/>
       <output_port name="output_path"/>
       <input_port name="goal"/>
+      <input_port name="replan_event_topic"/>
     </Action>
     <Control ID="PipelineSequence"
              editable="true"/>

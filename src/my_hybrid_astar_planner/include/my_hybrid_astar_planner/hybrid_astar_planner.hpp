@@ -2,17 +2,20 @@
 #define MY_HYBRID_ASTAR_PLANNER__HYBRID_ASTAR_PLANNER
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "builtin_interfaces/msg/time.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav2_core/global_planner.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav2_util/lifecycle_node.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rm_interfaces/msg/replan_event.hpp"
 #include "tf2_ros/buffer.h"
 
 namespace my_hybrid_astar_planner {
@@ -200,9 +203,15 @@ private:
         const geometry_msgs::msg::PoseStamped &a,
         const geometry_msgs::msg::PoseStamped &b
     ) const;
+    void publishReplanEvent(
+        uint8_t reason,
+        const geometry_msgs::msg::PoseStamped &goal,
+        const builtin_interfaces::msg::Time &candidate_path_stamp
+    );
 
     std::shared_ptr<tf2_ros::Buffer> tf_;
     nav2_util::LifecycleNode::SharedPtr node_;
+    rclcpp::Publisher<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_pub_;
     nav2_costmap_2d::Costmap2D *costmap_{nullptr};
     std::string global_frame_;
     std::string name_;
@@ -213,6 +222,7 @@ private:
     nav_msgs::msg::Path last_path_;
     bool has_last_path_{false};
     rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};
+    uint64_t replan_event_id_{0};
 };
 
 } // namespace my_hybrid_astar_planner

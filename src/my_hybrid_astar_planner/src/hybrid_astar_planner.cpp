@@ -43,6 +43,9 @@ void MyHybridAStarPlanner::configure(
     name_ = std::move(name);
     costmap_ = costmap_ros->getCostmap();
     global_frame_ = costmap_ros->getGlobalFrameID();
+    replan_event_pub_ = node_->create_publisher<rm_interfaces::msg::ReplanEvent>(
+        "trajectory_generation/replan_event",
+        rclcpp::QoS(1).reliable().transient_local());
 
     auto declare_double_param =
         [&](const std::string &param_name, double default_value, double &target) {
@@ -196,12 +199,20 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     const rclcpp::Time now = node_->now();
 
+    uint8_t replan_reason = rm_interfaces::msg::ReplanEvent::FORCED;
+
     if (params_.reuse_path_if_valid && has_last_path_ && !last_path_.poses.empty()) {
 
         const double cached_goal_error = pointDistance2D(last_path_.poses.back(), goal);
         const bool same_goal = cached_goal_error <= params_.goal_tolerance_xy;
         const bool blocked = params_.immediate_replan_if_blocked && isCachedPathBlocked(last_path_);
         const bool timeout = (now - last_plan_time_).seconds() >= params_.replan_time_threshold;
+        if (!same_goal)
+            replan_reason = rm_interfaces::msg::ReplanEvent::GOAL_CHANGED;
+        else if (blocked)
+            replan_reason = rm_interfaces::msg::ReplanEvent::PATH_BLOCKED;
+        else if (timeout)
+            replan_reason = rm_interfaces::msg::ReplanEvent::TIME_EXPIRED;
 
         if (same_goal && !blocked && !timeout) {
 
@@ -287,6 +298,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             last_path_ = planned_path;
             has_last_path_ = true;
             last_plan_time_ = now;
+            publishReplanEvent(replan_reason, goal, planned_path.header.stamp);
             return planned_path;
         }
 
@@ -465,6 +477,32 @@ double MyHybridAStarPlanner::pointDistance2D(
     return std::hypot(
         a.pose.position.x - b.pose.position.x,
         a.pose.position.y - b.pose.position.y);
+}
+
+void MyHybridAStarPlanner::publishReplanEvent(
+    uint8_t reason,
+    const geometry_msgs::msg::PoseStamped &goal,
+    const builtin_interfaces::msg::Time &candidate_path_stamp
+) {
+
+    if (!replan_event_pub_ || !node_)
+        return;
+
+    rm_interfaces::msg::ReplanEvent event;
+    event.header.stamp = node_->now();
+    event.header.frame_id = global_frame_;
+    event.need_replan = true;
+    event.event_id = ++replan_event_id_;
+    event.reason = reason;
+    event.candidate_path_stamp = candidate_path_stamp;
+    event.goal = goal;
+    replan_event_pub_->publish(event);
+
+    RCLCPP_INFO(
+        node_->get_logger(),
+        "Published replan event id=%lu reason=%u",
+        static_cast<unsigned long>(event.event_id),
+        event.reason);
 }
 
 /**

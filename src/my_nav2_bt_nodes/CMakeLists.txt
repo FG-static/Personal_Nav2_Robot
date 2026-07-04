@@ -7,9 +7,12 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(behaviortree_cpp REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_behavior_tree REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rm_interfaces REQUIRED)
 
 include_directories(include)
 
@@ -21,9 +24,12 @@ target_compile_definitions(my_manage_trajectory_bt_node PRIVATE BT_PLUGIN_EXPORT
 
 ament_target_dependencies(my_manage_trajectory_bt_node
     behaviortree_cpp
+    builtin_interfaces
     geometry_msgs
     nav2_behavior_tree
     nav_msgs
+    rclcpp
+    rm_interfaces
 )
 
 install(TARGETS my_manage_trajectory_bt_node
@@ -40,9 +46,12 @@ ament_export_include_directories(include)
 ament_export_libraries(my_manage_trajectory_bt_node)
 ament_export_dependencies(
     behaviortree_cpp
+    builtin_interfaces
     geometry_msgs
     nav2_behavior_tree
     nav_msgs
+    rclcpp
+    rm_interfaces
 )
 
 if(BUILD_TESTING)
