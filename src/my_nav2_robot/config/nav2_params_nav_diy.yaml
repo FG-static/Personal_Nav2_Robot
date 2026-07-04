@@ -63,7 +63,8 @@ bt_navigator:
 
     # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
     # Built-in plugins are added automatically
-    # plugin_lib_names: []
+    plugin_lib_names:
+      - my_manage_trajectory_bt_node
 
     error_code_name_prefixes:
       - assisted_teleop
@@ -139,6 +140,7 @@ controller_server:
       optimizer_verbose: false
       goal_tolerance_band: 0.25
       reinit_pose_distance: 0.15
+      min_forward_prune_distance: 0.2
       control_lookahead_dist: 0.25
       transform_tolerance: 0.1
 
@@ -277,7 +279,7 @@ planner_server:
       rs_weight: 0.05 # h_{reed_shepp} 代价函数权重
       reuse_path_if_valid: true
       immediate_replan_if_blocked: true
-      replan_time_threshold: 4.0
+      replan_time_threshold: 5.0
       path_prune_distance: 0.15
 
 smoother_server:
@@ -286,8 +288,8 @@ smoother_server:
     smoother_plugins: ["simple_smoother"]
     simple_smoother:
       plugin: "my_bspline_smoother/MyBSplineSmoother"
-      w_smooth: 20.0
-      w_guide: 0.3
+      w_smooth: 13.0
+      w_guide: 0.4
       max_outer_iterations: 4
       corridor_max_expand_dist: 0.8
       corridor_min_half_width: 0.05

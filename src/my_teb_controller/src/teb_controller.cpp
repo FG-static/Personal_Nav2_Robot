@@ -138,6 +138,10 @@ void MyTebController::configure(
     declare_bool_param("optimizer_verbose", config_.optimizer_verbose, config_.optimizer_verbose);
     declare_double_param("goal_tolerance_band", config_.goal_tolerance_band, config_.goal_tolerance_band);
     declare_double_param("reinit_pose_distance", config_.reinit_pose_distance, config_.reinit_pose_distance);
+    declare_double_param(
+        "min_forward_prune_distance",
+        config_.min_forward_prune_distance,
+        config_.min_forward_prune_distance);
 
     double transform_tolerance = 0.1;
     declare_double_param("transform_tolerance", transform_tolerance, transform_tolerance);
@@ -654,10 +658,20 @@ nav_msgs::msg::Path MyTebController::cropGlobalPlan(const PoseSE2 &robot_pose) c
         }
     }
 
+    size_t start_index = nearest_index;
+    while (start_index + 1 < global_plan_.poses.size()) {
+        const auto &pose = global_plan_.poses[start_index].pose.position;
+        const double distance = std::hypot(pose.x - robot_pose.x, pose.y - robot_pose.y);
+        if (distance >= config_.min_forward_prune_distance) {
+            break;
+        }
+        ++start_index;
+    }
+
     const double horizon =
         0.5 * std::min(costmap_ros_->getCostmap()->getSizeInMetersX(), costmap_ros_->getCostmap()->getSizeInMetersY());
 
-    for (size_t index = nearest_index; index < global_plan_.poses.size(); ++index) {
+    for (size_t index = start_index; index < global_plan_.poses.size(); ++index) {
         const auto &pose = global_plan_.poses[index];
         const double distance = std::hypot(
             pose.pose.position.x - robot_pose.x,

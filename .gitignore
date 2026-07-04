@@ -20,6 +20,7 @@ venv/
 .idea/
 *.swp
 *.swo
+.cache/clangd/index/
 
 # --- Gazebo & Logs ---
 *.log

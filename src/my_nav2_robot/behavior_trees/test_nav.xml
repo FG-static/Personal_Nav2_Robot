@@ -5,21 +5,24 @@
     <RecoveryNode name="NavigateRecovery"
                   number_of_retries="6">
       <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="20.0">
+        <RateController hz="1.0">
           <RecoveryNode name="ComputePathToPose"
                         number_of_retries="1">
             <Sequence>
               <ComputePathToPose goal="{goal}"
-                                 path="{path}"
+                                 path="{raw_path}"
                                  planner_id="GridBased"/>
               <SmoothPath smoother_id="simple_smoother"
-                          unsmoothed_path="{path}"
-                          smoothed_path="{path}"/>
+                          unsmoothed_path="{raw_path}"
+                          smoothed_path="{candidate_path}"/>
             </Sequence>
             <ClearEntireCostmap name="ClearGlobalCostmap-Context"
                                 service_name="global_costmap/clear_entirely_global_costmap"/>
           </RecoveryNode>
         </RateController>
+        <ManageTrajectory input_path="{candidate_path}"
+                          output_path="{path}"
+                          goal="{goal}"/>
         <FollowPath path="{path}"
                     controller_id="FollowPath"/>
       </PipelineSequence>
@@ -60,6 +63,12 @@
     </Action>
     <Action ID="GoalUpdated"
             editable="true"/>
+    <Action ID="ManageTrajectory"
+            editable="true">
+      <input_port name="input_path"/>
+      <output_port name="output_path"/>
+      <input_port name="goal"/>
+    </Action>
     <Control ID="PipelineSequence"
              editable="true"/>
     <Decorator ID="RateController"
@@ -72,12 +81,9 @@
     </Control>
     <Action ID="SmoothPath"
             editable="true">
-      <input_port name="smoother_id"
-                  type="std::string"/>
-      <input_port name="unsmoothed_path"
-                  type="path"/>
-      <output_port name="smoothed_path"
-                   type="path"/>
+      <input_port name="smoother_id"/>
+      <input_port name="unsmoothed_path"/>
+      <output_port name="smoothed_path"/>
     </Action>
     <Action ID="Wait"
             editable="true">

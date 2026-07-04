@@ -74,6 +74,7 @@ struct TebConfig {
     bool optimizer_verbose = false;
     double goal_tolerance_band = 0.25;
     double reinit_pose_distance = 0.3;
+    double min_forward_prune_distance = 0.2;
 };
 
 using ObstacleSamples = std::vector<Eigen::Vector2d>;
