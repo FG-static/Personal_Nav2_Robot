@@ -87,7 +87,7 @@ struct HybridNode {
     double h_grid = std::numeric_limits<double>::infinity(); // 剩余估计代价
     double h_yaw = 0.0;
     double h_rs = 0.0; // reed_shepp 代价
-    double f = std::numeric_limits<double>::infinity();
+    double f = std::numeric_limits<double>::infinity(); // 总
     int parent_index = -1;
     int parent_primitive_id = -1;
     bool closed = false;
@@ -173,7 +173,7 @@ private:
     double getGridHeuristic(unsigned int mx, unsigned int my) const;
     bool isCellTraversable(unsigned int mx, unsigned int my) const;
     double computeNodeHeuristic(const PlannerPose &pose, const PlannerPose &goal) const;
-    const MotionPrimitive * findMotionPrimitiveById(int primitive_id) const;
+    const MotionPrimitive* findMotionPrimitiveById(int primitive_id) const;
     bool simulatePrimitive(
         const HybridNode &current,
         const MotionPrimitive &primitive,

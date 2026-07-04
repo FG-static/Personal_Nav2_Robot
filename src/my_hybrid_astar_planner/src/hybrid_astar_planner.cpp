@@ -20,7 +20,7 @@ using nav2_util::declare_parameter_if_not_declared;
 
 namespace my_hybrid_astar_planner {
 
-// 哈希函数
+// 哈希函数 用于快速查找已扩展节点索引
 std::size_t StateKeyHasher::operator()(const StateKey &key) const {
 
     std::size_t seed = static_cast<std::size_t>(key.mx);
@@ -234,9 +234,18 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     struct OpenEntry {
 
         double f;
+        double h;
+        double g;
         int node_idx;
         bool operator>(const OpenEntry &other) const {
-            return f > other.f;
+
+            if (f != other.f)
+                return f > other.f;
+            if (h != other.h)
+                return h > other.h;
+            if (g != other.g)
+                return g > other.g;
+            return node_idx > other.node_idx;
         }
     };
 
@@ -254,7 +263,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     nodes.push_back(start_node);
     node_lookup[start_node.key] = 0;
-    open_list.push({start_node.f, 0});
+    open_list.push({start_node.f, start_node.h_grid, start_node.g, 0});
 
     // 搜索
     while (!open_list.empty()) {
@@ -316,7 +325,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 const int new_index = static_cast<int>(nodes.size());
                 nodes.push_back(next_node);
                 node_lookup[next_key] = new_index;
-                open_list.push({next_node.f, new_index});
+                open_list.push({next_node.f, next_node.h_grid, next_node.g, new_index});
             } else { // 非同一路径拓展过的
 
                 HybridNode &old_node = nodes[it->second];
@@ -331,7 +340,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                     old_node.h_rs = 0.0;
                     old_node.f = old_node.g + old_node.h_grid;
 
-                    open_list.push({old_node.f, it->second});
+                    open_list.push({old_node.f, old_node.h_grid, old_node.g, it->second});
                 }
             }
         }
@@ -341,7 +350,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     return global_path;
 }
 
-// 查障碍物是否挡住障碍物
+// 查障碍物是否挡住路径
 bool MyHybridAStarPlanner::isCachedPathBlocked(const nav_msgs::msg::Path &path) const {
 
     for (const auto &pose : path.poses) {
@@ -459,7 +468,12 @@ double MyHybridAStarPlanner::pointDistance2D(
 }
 
 /**
- * @brief 路径回溯
+ * @brief 路径回溯重建
+ * @param nodes 路径点
+ * @param goal_index 目标点索引，用于使用其父节点回溯重建路径
+ * @param start 起始点
+ * @param goal 目标点
+ * @return nav_msgs::msg::Path 一条路径
  */
 nav_msgs::msg::Path MyHybridAStarPlanner::reconstructPath(
     const std::vector<HybridNode> &nodes,
@@ -497,7 +511,8 @@ nav_msgs::msg::Path MyHybridAStarPlanner::reconstructPath(
                 primitive->v_x,
                 primitive->v_y,
                 primitive->omega,
-                params_.step_time);
+                params_.step_time
+            );
 
             geometry_msgs::msg::PoseStamped sampled_pose;
             sampled_pose.header = path.header;
@@ -575,7 +590,8 @@ MotionPrimitive MyHybridAStarPlanner::makePrimitive(
     double v_x,
     double v_y,
     double omega,
-    MotionDirection direction) const {
+    MotionDirection direction
+) const {
 
     MotionPrimitive primitive;
     primitive.id = id;
@@ -609,7 +625,8 @@ PlannerPose MyHybridAStarPlanner::integrateMecanumMotion(
     double v_x,
     double v_y,
     double omega,
-    double dt) const {
+    double dt
+) const {
 
     const double cos_yaw = std::cos(start_pose.yaw);
     const double sin_yaw = std::sin(start_pose.yaw);
@@ -726,6 +743,7 @@ bool MyHybridAStarPlanner::computeGridHeuristic(
     return true;
 }
 
+// 构造总启发式代价
 double MyHybridAStarPlanner::computeNodeHeuristic(
     const PlannerPose &pose,
     const PlannerPose &goal
