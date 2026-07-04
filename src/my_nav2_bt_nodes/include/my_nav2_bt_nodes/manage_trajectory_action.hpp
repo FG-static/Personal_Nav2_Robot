@@ -45,6 +45,12 @@ private:
     double getYaw(const geometry_msgs::msg::Quaternion &q) const;
     double normalizeAngle(double angle) const;
 
+    // 设置单独线程回调组的原因是：
+    // BT Node 本身只是被 tick 的同步对象，它不负责 spin ROS callback
+    // 因此自定义 BT Node 的回调函数很可能一直无法执行
+    // 所以给所有的回调组创建独立的 executor 线程来 spin callback group
+    // 注意，在使用 create_callback_group( ..., false ) 时最后一个 false表示
+    // 不将这个 callback group 加入 bt_navigator 原来的 executor
     rclcpp::Node::SharedPtr node_;
     rclcpp::CallbackGroup::SharedPtr event_callback_group_;
     rclcpp::Subscription<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_sub_;
