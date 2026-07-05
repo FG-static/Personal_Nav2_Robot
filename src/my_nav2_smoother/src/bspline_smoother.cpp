@@ -96,13 +96,18 @@ namespace my_bspline_smoother {
         const rclcpp::Duration &/*max_time*/
     ) {
 
-        if (path.poses.size() < 4) return true;
+        if (path.poses.size() < 4)
+            return true;
+
         nav_msgs::msg::Path raw_path = path;
-        applyBSplineAlgorithm(path, raw_path);
+        if (!applyBSplineAlgorithm(path, raw_path)) {
+            path = raw_path;
+            return false;
+        }
 
         return true;
     }
-    void MyBSplineSmoother::applyBSplineAlgorithm(
+    bool MyBSplineSmoother::applyBSplineAlgorithm(
         nav_msgs::msg::Path &path,
         const nav_msgs::msg::Path &raw_path
     ) {
@@ -110,7 +115,7 @@ namespace my_bspline_smoother {
         if (raw_path.poses.size() < 4) {
 
             path = raw_path;
-            return;
+            return true;
         }
         std::vector<double>
             ref_path_x,
@@ -123,8 +128,31 @@ namespace my_bspline_smoother {
             ref_path_y.push_back(raw_path.poses[i].pose.position.y);
         }
         path_frame_id_ = raw_path.header.frame_id.empty() ? "map" : raw_path.header.frame_id;
-        solveBSplineQP(ref_path_x, ref_path_y, w_smooth_, w_guide_, smooth_path_x, smooth_path_y);
-        int n = smooth_path_x.size();
+        const bool solved =
+            solveBSplineQP(ref_path_x, ref_path_y, w_smooth_, w_guide_, smooth_path_x, smooth_path_y);
+        if (!solved) {
+
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "B-Spline smoothing failed, falling back to raw path");
+            path = raw_path;
+            return false;
+        }
+
+        if (smooth_path_x.size() != smooth_path_y.size() ||
+            smooth_path_x.size() != raw_path.poses.size()) {
+
+            RCLCPP_ERROR(
+                node_->get_logger(),
+                "B-Spline smoothing produced inconsistent vector sizes: x=%zu y=%zu raw=%zu",
+                smooth_path_x.size(),
+                smooth_path_y.size(),
+                raw_path.poses.size());
+            path = raw_path;
+            return false;
+        }
+
+        const int n = static_cast<int>(smooth_path_x.size());
         for (int i = 0; i < n; ++ i) {
 
             double yaw;
@@ -146,6 +174,8 @@ namespace my_bspline_smoother {
             q.setRPY(0, 0, yaw); // Roll=0, Pitch=0, Yaw=yaw
             path.poses[i].pose.orientation = tf2::toMsg(q);
         }
+
+        return true;
     }
 
     /**

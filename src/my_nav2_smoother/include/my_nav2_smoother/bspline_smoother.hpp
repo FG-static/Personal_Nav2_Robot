@@ -124,7 +124,7 @@ namespace my_bspline_smoother {
     private:
 
         // 平滑算法
-        void applyBSplineAlgorithm(
+        bool applyBSplineAlgorithm(
             nav_msgs::msg::Path &path,
             const nav_msgs::msg::Path &raw_path
         );

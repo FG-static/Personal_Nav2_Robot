@@ -259,7 +259,7 @@ planner_server:
       # rrt* 220ms
       #plugin: "my_rrtstar_planner/MyRRTStarPlanner"
       step_size: 0.25
-      max_iterations: 20000
+      max_iterations: 60000
       search_radius: 2.0
       goal_sample_rate: 0.5
       goal_tolerance: 0.5
@@ -271,13 +271,13 @@ planner_server:
       interpolation_resolution: 0.1
       # Hybrid A*
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
-      primitive_duration: 0.2
-      step_time: 0.02
-      yaw_bin_count: 96 # 朝向离散桶数
-      max_planning_time: 1.0
+      primitive_duration: 0.35
+      step_time: 0.025
+      yaw_bin_count: 48 # 朝向离散桶数
+      max_planning_time: 3.0
       heuristic_grid_weight: 1.0 # h_2D 代价函数权重
       heuristic_yaw_weight: 0.1 # 姿态误差权重
-      path_tangent_change_weight: 0.2 # 相邻路径切线变化惩罚权重
+      path_tangent_change_weight: 0.6 # 相邻路径切线变化惩罚权重
       rs_weight: 0.05 # h_{reed_shepp} 代价函数权重
       reuse_path_if_valid: true
       immediate_replan_if_blocked: true

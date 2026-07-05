@@ -343,10 +343,15 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             return global_path;
         }
 
-        HybridNode &current_node = nodes[cur_idx];
-        if (current_node.closed) continue;
-        current_node.closed = true;
+        if (nodes[cur_idx].closed)
+            continue;
+
+        nodes[cur_idx].closed = true;
         ++expanded_iterations;
+
+        // Copy the expanded node locally so later nodes.push_back() reallocations
+        // cannot invalidate references used during primitive expansion.
+        const HybridNode current_node = nodes[cur_idx];
 
         if (isGoalReached(current_node.pose, goal_pose)) {
 
