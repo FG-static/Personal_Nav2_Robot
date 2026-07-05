@@ -277,7 +277,7 @@ planner_server:
       max_planning_time: 3.0
       heuristic_grid_weight: 1.0 # h_2D 代价函数权重
       heuristic_yaw_weight: 0.1 # 姿态误差权重
-      path_tangent_change_weight: 0.6 # 相邻路径切线变化惩罚权重
+      path_tangent_change_weight: 1.0 # 相邻路径切线变化惩罚权重
       rs_weight: 0.05 # h_{reed_shepp} 代价函数权重
       reuse_path_if_valid: true
       immediate_replan_if_blocked: true

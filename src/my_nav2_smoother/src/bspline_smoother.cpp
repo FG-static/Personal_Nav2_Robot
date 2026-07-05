@@ -16,6 +16,68 @@ extern "C" {
 
 namespace my_bspline_smoother {
 
+    // 安全走廊可视化
+    namespace {
+
+    struct VisualBox {
+
+        double lower_x = 0.0;
+        double upper_x = 0.0;
+        double lower_y = 0.0;
+        double upper_y = 0.0;
+    };
+
+    bool containsBox(const VisualBox &a, const VisualBox &b) {
+
+        return a.lower_x <= b.lower_x &&
+               a.upper_x >= b.upper_x &&
+               a.lower_y <= b.lower_y &&
+               a.upper_y >= b.upper_y;
+    }
+
+    bool intersectsBox(const VisualBox &a, const VisualBox &b) {
+
+        return !(a.upper_x < b.lower_x ||
+                 b.upper_x < a.lower_x ||
+                 a.upper_y < b.lower_y ||
+                 b.upper_y < a.lower_y);
+    }
+
+    double boxArea(const VisualBox &box) {
+
+        return std::max(0.0, box.upper_x - box.lower_x) *
+               std::max(0.0, box.upper_y - box.lower_y);
+    }
+
+    double overlapRatioBox(const VisualBox &a, const VisualBox &b) {
+
+        if (!intersectsBox(a, b))
+            return 0.0;
+
+        const double overlap_x =
+            std::max(0.0, std::min(a.upper_x, b.upper_x) - std::max(a.lower_x, b.lower_x));
+        const double overlap_y =
+            std::max(0.0, std::min(a.upper_y, b.upper_y) - std::max(a.lower_y, b.lower_y));
+        const double intersection_area = overlap_x * overlap_y;
+        const double min_area = std::min(boxArea(a), boxArea(b));
+        if (min_area <= 1e-9)
+            return 0.0;
+
+        return intersection_area / min_area;
+    }
+
+    VisualBox mergeBoxes(const VisualBox &a, const VisualBox &b) {
+
+        VisualBox merged;
+        merged.lower_x = std::min(a.lower_x, b.lower_x);
+        merged.upper_x = std::max(a.upper_x, b.upper_x);
+        merged.lower_y = std::min(a.lower_y, b.lower_y);
+        merged.upper_y = std::max(a.upper_y, b.upper_y);
+        return merged;
+    }
+
+    } // namespace
+
     void MyBSplineSmoother::configure(
         const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
         std::string name,
@@ -622,7 +684,6 @@ namespace my_bspline_smoother {
         return bounds;
     }
 
-    // TODO：Understanf it
     std::vector<GridBox> MyBSplineSmoother::buildSegmentCorridorBoxes(
         const std::vector<double> &p_ref_x,
         const std::vector<double> &p_ref_y
@@ -706,10 +767,49 @@ namespace my_bspline_smoother {
         clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
         markers.markers.push_back(clear_marker);
 
+        std::vector<VisualBox> merged_boxes;
         for (std::size_t i = 0; i < n; ++ i) {
 
             const double width = bounds.upper_x[i] - bounds.lower_x[i];
             const double height = bounds.upper_y[i] - bounds.lower_y[i];
+            if (width < 0.0 || height < 0.0)
+                continue;
+
+            VisualBox candidate;
+            candidate.lower_x = bounds.lower_x[i];
+            candidate.upper_x = bounds.upper_x[i];
+            candidate.lower_y = bounds.lower_y[i];
+            candidate.upper_y = bounds.upper_y[i];
+
+            bool absorbed = false;
+            for (std::size_t existing_index = 0; existing_index < merged_boxes.size();) {
+
+                if (containsBox(merged_boxes[existing_index], candidate)) {
+
+                    absorbed = true;
+                    break;
+                }
+
+                if (containsBox(candidate, merged_boxes[existing_index]) ||
+                    overlapRatioBox(candidate, merged_boxes[existing_index]) >=
+                        corridor_overlap_threshold_) {
+
+                    candidate = mergeBoxes(candidate, merged_boxes[existing_index]);
+                    merged_boxes.erase(merged_boxes.begin() + static_cast<std::ptrdiff_t>(existing_index));
+                    continue;
+                }
+
+                ++ existing_index;
+            }
+
+            if (!absorbed)
+                merged_boxes.push_back(candidate);
+        }
+
+        for (std::size_t i = 0; i < merged_boxes.size(); ++ i) {
+
+            const double width = merged_boxes[i].upper_x - merged_boxes[i].lower_x;
+            const double height = merged_boxes[i].upper_y - merged_boxes[i].lower_y;
             if (width < 0.0 || height < 0.0)
                 continue;
 
@@ -720,8 +820,8 @@ namespace my_bspline_smoother {
             marker.id = static_cast<int>(i + 1);
             marker.type = visualization_msgs::msg::Marker::CUBE;
             marker.action = visualization_msgs::msg::Marker::ADD;
-            marker.pose.position.x = 0.5 * (bounds.lower_x[i] + bounds.upper_x[i]);
-            marker.pose.position.y = 0.5 * (bounds.lower_y[i] + bounds.upper_y[i]);
+            marker.pose.position.x = 0.5 * (merged_boxes[i].lower_x + merged_boxes[i].upper_x);
+            marker.pose.position.y = 0.5 * (merged_boxes[i].lower_y + merged_boxes[i].upper_y);
             marker.pose.position.z = 0.5 * corridor_marker_z_;
             marker.pose.orientation.w = 1.0;
             marker.scale.x = std::max(width, 1e-3);
@@ -730,7 +830,7 @@ namespace my_bspline_smoother {
             marker.color.r = 0.1F;
             marker.color.g = 0.75F;
             marker.color.b = 1.0F;
-            marker.color.a = 0.18F;
+            marker.color.a = 0.2F;
             markers.markers.push_back(marker);
         }
 
