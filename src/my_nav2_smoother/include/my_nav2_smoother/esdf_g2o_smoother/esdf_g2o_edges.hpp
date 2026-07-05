@@ -24,6 +24,7 @@ public:
     }
 
     void computeError() override {
+
         _error[0] = 0.0;
         if (esdf_map_ == nullptr)
             return;
@@ -38,6 +39,27 @@ public:
         const double min_obstacle_dist = _measurement;
         if (result.distance < min_obstacle_dist)
             _error[0] = min_obstacle_dist - result.distance;
+    }
+
+    // 手写解析 Jacobian ，避免 g2o 使用默认的数值扰动计算数值 Jacobian
+    void linearizeOplus() override {
+
+        _jacobianOplusXi.setZero();
+        if (esdf_map_ == nullptr)
+            return;
+
+        const auto *vertex = static_cast<const VertexPathPoint *>(_vertices[0]);
+        EsdfQueryResult result;
+        if (!esdf_map_->query(vertex->estimate().x(), vertex->estimate().y(), result) ||
+            !result.valid)
+            return;
+
+        const double min_obstacle_dist = _measurement;
+        if (result.distance >= min_obstacle_dist || !result.gradient.allFinite())
+            return;
+
+        _jacobianOplusXi(0, 0) = -result.gradient.x();
+        _jacobianOplusXi(0, 1) = -result.gradient.y();
     }
 
     bool read(std::istream &/*is*/) override {
@@ -60,8 +82,14 @@ public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     void computeError() override {
+
         const auto *vertex = static_cast<const VertexPathPoint *>(_vertices[0]);
         _error = vertex->estimate() - _measurement;
+    }
+
+    void linearizeOplus() override {
+
+        _jacobianOplusXi.setIdentity();
     }
 
     bool read(std::istream &/*is*/) override {
@@ -84,10 +112,19 @@ public:
     }
 
     void computeError() override {
+
         const auto *prev = static_cast<const VertexPathPoint *>(_vertices[0]);
         const auto *current = static_cast<const VertexPathPoint *>(_vertices[1]);
         const auto *next = static_cast<const VertexPathPoint *>(_vertices[2]);
         _error = prev->estimate() - 2.0 * current->estimate() + next->estimate();
+    }
+
+    void linearizeOplus() override {
+
+        _jacobianOplus[0].setIdentity();
+        _jacobianOplus[1].setIdentity();
+        _jacobianOplus[1] *= -2.0;
+        _jacobianOplus[2].setIdentity();
     }
 
     bool read(std::istream &/*is*/) override {
