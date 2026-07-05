@@ -5,6 +5,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -21,16 +23,22 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(osqp_vendor REQUIRED)
 find_package(osqp REQUIRED)
+find_package(G2O REQUIRED MODULE)
+find_package(OpenCV REQUIRED)
 
 # 添加头文件目录
 include_directories(
   include
   ${Eigen3_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 # 编译动态库 (Shared Library)
 add_library(${PROJECT_NAME}_lib SHARED
   src/bspline_smoother.cpp
+  src/esdf_g2o_smoother/esdf_map.cpp
+  src/esdf_g2o_smoother/esdf_g2o_optimizer.cpp
+  src/esdf_g2o_smoother/esdf_g2o_smoother.cpp
 )
 ament_target_dependencies(${PROJECT_NAME}_lib
   rclcpp
@@ -50,6 +58,8 @@ ament_target_dependencies(${PROJECT_NAME}_lib
 
 target_link_libraries(${PROJECT_NAME}_lib
   osqp::osqp
+  G2O::all
+  ${OpenCV_LIBS}
 )
 
 pluginlib_export_plugin_description_file(nav2_core plugins.xml)

@@ -6,4 +6,11 @@
             B-Spline平滑器
         </description>
     </class>
+    <class name="my_nav2_smoother/EsdfG2oSmoother"
+            type="my_nav2_smoother::EsdfG2oSmoother"
+            base_class_type="nav2_core::Smoother">
+        <description>
+            ESDF + g2o trajectory smoother skeleton
+        </description>
+    </class>
 </library>
