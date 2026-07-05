@@ -396,11 +396,24 @@ PoseSE2 MyTebController::mecanumForwardKinematics(
 bool MyTebController::checkTrajectoryFeasibility() {
 
     if (teb_trajectory_.size() < 2) {
+        RCLCPP_WARN_THROTTLE(
+            logger_,
+            *clock_,
+            1000,
+            "TEB feasibility failed: trajectory has fewer than 2 timed poses");
         return false;
     }
 
-    for (const auto &timed_pose : teb_trajectory_) {
+    for (size_t index = 0; index < teb_trajectory_.size(); ++index) {
+        const auto &timed_pose = teb_trajectory_[index];
         if (!std::isfinite(timed_pose.dt) || timed_pose.dt < 0.0) {
+            RCLCPP_WARN_THROTTLE(
+                logger_,
+                *clock_,
+                1000,
+                "TEB feasibility failed: pose[%zu] has invalid dt=%.6f",
+                index,
+                timed_pose.dt);
             return false;
         }
 
@@ -409,6 +422,14 @@ bool MyTebController::checkTrajectoryFeasibility() {
             continue;
         }
         if (obstacle_distance < config_.min_obstacle_dist) {
+            RCLCPP_WARN_THROTTLE(
+                logger_,
+                *clock_,
+                1000,
+                "TEB feasibility failed: pose[%zu] obstacle distance %.3f < min_obstacle_dist %.3f",
+                index,
+                obstacle_distance,
+                config_.min_obstacle_dist);
             return false;
         }
     }
@@ -418,6 +439,13 @@ bool MyTebController::checkTrajectoryFeasibility() {
         const PoseSE2 &to_pose = teb_trajectory_[index + 1].pose;
         const double dt = teb_trajectory_[index].dt;
         if (!std::isfinite(dt) || dt <= 0.0) {
+            RCLCPP_WARN_THROTTLE(
+                logger_,
+                *clock_,
+                1000,
+                "TEB feasibility failed: segment[%zu] has invalid dt=%.6f",
+                index,
+                dt);
             return false;
         }
 
@@ -443,6 +471,13 @@ bool MyTebController::checkTrajectoryFeasibility() {
             predicted_delta.x - (to_pose.x - from_pose.x),
             predicted_delta.y - (to_pose.y - from_pose.y));
         if (!std::isfinite(delta_error) || delta_error > 1e-3) {
+            RCLCPP_WARN_THROTTLE(
+                logger_,
+                *clock_,
+                1000,
+                "TEB feasibility failed: segment[%zu] kinematic delta error %.6f",
+                index,
+                delta_error);
             return false;
         }
     }
@@ -451,6 +486,14 @@ bool MyTebController::checkTrajectoryFeasibility() {
         const double dt_1 = teb_trajectory_[index].dt;
         const double dt_2 = teb_trajectory_[index + 1].dt;
         if (!std::isfinite(dt_1) || !std::isfinite(dt_2) || dt_1 <= 0.0 || dt_2 <= 0.0) {
+            RCLCPP_WARN_THROTTLE(
+                logger_,
+                *clock_,
+                1000,
+                "TEB feasibility failed: acceleration window[%zu] has invalid dt values %.6f / %.6f",
+                index,
+                dt_1,
+                dt_2);
             return false;
         }
 

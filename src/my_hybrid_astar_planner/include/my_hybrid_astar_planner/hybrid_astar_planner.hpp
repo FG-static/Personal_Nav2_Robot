@@ -116,12 +116,15 @@ struct PlannerParams {
     double goal_tolerance_yaw = 0.2;
     double heuristic_grid_weight = 1.0;
     double heuristic_yaw_weight = 0.2;
+    double path_tangent_change_weight = 0.2;
     double rs_weight = 0.15;
     double rs_reverse_penalty = 0.4;
     double rs_gear_switch_penalty = 0.2;
     double analytic_expansion_distance = 2.0;
     double replan_time_threshold = 2.0;
     double path_prune_distance = 0.15;
+    int max_iterations = 20000;
+    double max_planning_time = 1.0;
     bool immediate_replan_if_blocked = true;
     bool reuse_path_if_valid = true;
 };

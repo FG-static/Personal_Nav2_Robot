@@ -252,7 +252,7 @@ map_saver:
 planner_server:
   ros__parameters:
     use_sim_time: True
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 1.0
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
     GridBased:
@@ -272,10 +272,12 @@ planner_server:
       # Hybrid A*
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       primitive_duration: 0.2
-      step_time: 0.05
+      step_time: 0.02
       yaw_bin_count: 96 # 朝向离散桶数
+      max_planning_time: 1.0
       heuristic_grid_weight: 1.0 # h_2D 代价函数权重
       heuristic_yaw_weight: 0.1 # 姿态误差权重
+      path_tangent_change_weight: 0.2 # 相邻路径切线变化惩罚权重
       rs_weight: 0.05 # h_{reed_shepp} 代价函数权重
       reuse_path_if_valid: true
       immediate_replan_if_blocked: true

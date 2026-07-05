@@ -102,6 +102,10 @@ void MyHybridAStarPlanner::configure(
         "heuristic_yaw_weight",
         params_.heuristic_yaw_weight,
         params_.heuristic_yaw_weight);
+    declare_double_param(
+        "path_tangent_change_weight",
+        params_.path_tangent_change_weight,
+        params_.path_tangent_change_weight);
     declare_double_param("rs_weight", params_.rs_weight, params_.rs_weight);
     declare_double_param(
         "rs_reverse_penalty",
@@ -123,6 +127,14 @@ void MyHybridAStarPlanner::configure(
         "path_prune_distance",
         params_.path_prune_distance,
         params_.path_prune_distance);
+    declare_int_param(
+        "max_iterations",
+        params_.max_iterations,
+        params_.max_iterations);
+    declare_double_param(
+        "max_planning_time",
+        params_.max_planning_time,
+        params_.max_planning_time);
     declare_bool_param(
         "immediate_replan_if_blocked",
         params_.immediate_replan_if_blocked,
@@ -136,12 +148,14 @@ void MyHybridAStarPlanner::configure(
 
     RCLCPP_INFO(
         node_->get_logger(),
-        "Mecanum Hybrid A* planner configured: yaw_bins=%d primitives=%zu max_vel=(%.2f, %.2f, %.2f)",
+        "Mecanum Hybrid A* planner configured: yaw_bins=%d primitives=%zu max_vel=(%.2f, %.2f, %.2f) max_iter=%d max_time=%.2fs",
         params_.yaw_bin_count,
         motion_primitives_.size(),
         params_.max_vel_x,
         params_.max_vel_y,
-        params_.max_vel_theta);
+        params_.max_vel_theta,
+        params_.max_iterations,
+        params_.max_planning_time);
 }
 
 void MyHybridAStarPlanner::activate() {
@@ -238,9 +252,12 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     }
 
     std::vector<HybridNode> nodes;
-    nodes.reserve(4096);
+    const int max_iterations = std::max(1, params_.max_iterations);
+    const std::size_t max_node_count = static_cast<std::size_t>(max_iterations);
+    nodes.reserve(std::min<std::size_t>(max_node_count, 4096));
 
     std::unordered_map<StateKey, int, StateKeyHasher> node_lookup;
+    node_lookup.reserve(std::min<std::size_t>(max_node_count, 4096));
 
     struct OpenEntry {
 
@@ -271,10 +288,18 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     start_node.h_yaw = 0.0;
     start_node.h_rs = 0.0;
     start_node.f = start_node.g + start_node.h_grid;
+    if (!std::isfinite(start_node.f)) {
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "Hybrid A* start heuristic is not finite. Search may fail quickly.");
+    }
 
     nodes.push_back(start_node);
     node_lookup[start_node.key] = 0;
     open_list.push({start_node.f, start_node.h_grid, start_node.g, 0});
+
+    const rclcpp::Time search_start_time = node_->now();
+    int expanded_iterations = 0;
 
     // 搜索
     while (!open_list.empty()) {
@@ -285,12 +310,43 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             return nav_msgs::msg::Path{};
         }
 
+        if (expanded_iterations >= max_iterations) {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "Hybrid A* aborted after reaching max_iterations=%d, nodes=%zu, open=%zu",
+                max_iterations,
+                nodes.size(),
+                open_list.size());
+            return global_path;
+        }
+
+        if (params_.max_planning_time > 0.0 &&
+            (node_->now() - search_start_time).seconds() > params_.max_planning_time) {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "Hybrid A* aborted after %.3fs, expanded=%d, nodes=%zu, open=%zu",
+                (node_->now() - search_start_time).seconds(),
+                expanded_iterations,
+                nodes.size(),
+                open_list.size());
+            return global_path;
+        }
+
         const int cur_idx = open_list.top().node_idx;
         open_list.pop();
+        if (cur_idx < 0 || cur_idx >= static_cast<int>(nodes.size())) {
+            RCLCPP_ERROR(
+                node_->get_logger(),
+                "Hybrid A* open list produced invalid node index %d, nodes=%zu",
+                cur_idx,
+                nodes.size());
+            return global_path;
+        }
 
         HybridNode &current_node = nodes[cur_idx];
         if (current_node.closed) continue;
         current_node.closed = true;
+        ++expanded_iterations;
 
         if (isGoalReached(current_node.pose, goal_pose)) {
 
@@ -299,6 +355,13 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             has_last_path_ = true;
             last_plan_time_ = now;
             publishReplanEvent(replan_reason, goal, planned_path.header.stamp);
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "Hybrid A* succeeded in %.3fs, expanded=%d, nodes=%zu, path_points=%zu",
+                (node_->now() - search_start_time).seconds(),
+                expanded_iterations,
+                nodes.size(),
+                planned_path.poses.size());
             return planned_path;
         }
 
@@ -317,11 +380,42 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             if (!costmap_->worldToMap(next_pose.x, next_pose.y, end_mx, end_my))
                 continue;
 
-            const double new_g = current_node.g + transition_cost;
+            // Penalize abrupt changes between consecutive path tangents.
+            double new_g = current_node.g + transition_cost;
+            if (current_node.parent_index >= 0) {
+
+                const auto &parrent_node = nodes[current_node.parent_index];
+
+                const double
+                    v1x = current_node.pose.x - parrent_node.pose.x,
+                    v1y = current_node.pose.y - parrent_node.pose.y,
+                    v2x = next_pose.x - current_node.pose.x,
+                    v2y = next_pose.y - current_node.pose.y;
+
+                if (std::hypot(v1x, v1y) > 1e-6 &&
+                    std::hypot(v2x, v2y) > 1e-6) {
+
+                    const double yaw1 = std::atan2(v1y, v1x);
+                    const double yaw2 = std::atan2(v2y, v2x);
+                    const double dtheta =
+                        std::abs(normalizeAngle(yaw2 - yaw1));
+                    new_g += params_.path_tangent_change_weight * dtheta;
+                }
+            }
 
             // push node
             auto it = node_lookup.find(next_key);
             if (it == node_lookup.end()) { // 未拓展过的
+
+                if (nodes.size() >= max_node_count) {
+                    RCLCPP_WARN(
+                        node_->get_logger(),
+                        "Hybrid A* aborted after reaching max node count=%zu, expanded=%d, open=%zu",
+                        max_node_count,
+                        expanded_iterations,
+                        open_list.size());
+                    return global_path;
+                }
 
                 HybridNode next_node;
                 next_node.key = next_key;
@@ -358,7 +452,12 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         }
     }
 
-    RCLCPP_WARN(node_->get_logger(), "Hybrid A* failed to find a valid path");
+    RCLCPP_WARN(
+        node_->get_logger(),
+        "Hybrid A* failed to find a valid path after %.3fs, expanded=%d, nodes=%zu",
+        (node_->now() - search_start_time).seconds(),
+        expanded_iterations,
+        nodes.size());
     return global_path;
 }
 

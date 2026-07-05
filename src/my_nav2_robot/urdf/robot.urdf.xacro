@@ -163,7 +163,7 @@
 
     <!--深度相机-->
     <!--物理位置-->
-    <link name="camera_link">
+    <!-- <link name="camera_link">
         <visual>
             <geometry>
                 <cylinder radius="${laser_radius}" length="${laser_height}"/>
@@ -179,7 +179,7 @@
         <parent link="base_link"/>
         <child link="camera_link"/>
         <origin xyz="0.2 0 ${chassis_height + laser_height / 2 - 0.06}" rpy="0 0 0"/>
-    </joint>
+    </joint> -->
 
     <!--imu-->
     <link name = "imu_link">
@@ -227,10 +227,10 @@
     </gazebo>
 
     <!--深度相机插件-->
-    <gazebo reference="camera_link">
+    <!-- <gazebo reference="camera_link">
         <sensor name="depth_camera" type="rgbd_camera">
             <visualize>true</visualize>
-            <update_rate>10.0</update_rate> <!-- 原10hz，到时候再改回来 -->
+            <update_rate>10.0</update_rate> <!- 原10hz，到时候再改回来 ->
             <topic>depth_camera</topic>
             <gz_frame_id>camera_link</gz_frame_id>
             <camera>
@@ -246,7 +246,7 @@
                 </clip>
             </camera>
         </sensor>
-    </gazebo>
+    </gazebo> -->
 
     <!--imu插件-->
     <gazebo reference="imu_link">
