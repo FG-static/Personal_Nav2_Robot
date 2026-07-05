@@ -12,7 +12,7 @@
               <ComputePathToPose goal="{goal}"
                                  path="{raw_path}"
                                  planner_id="GridBased"/>
-              <SmoothPath smoother_id="simple_smoother"
+              <SmoothPath smoother_id="esdf_g2o_smoother"
                           unsmoothed_path="{raw_path}"
                           smoothed_path="{candidate_path}"/>
             </Sequence>

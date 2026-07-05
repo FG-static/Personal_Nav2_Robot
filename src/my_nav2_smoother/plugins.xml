@@ -1,5 +1,5 @@
 <library path="my_nav2_smoother_lib">
-    <class name="my_bspline_smoother/MyBSplineSmoother" 
+    <class name="my_bspline_smoother/MyBSplineSmoother"
             type="my_bspline_smoother::MyBSplineSmoother"
             base_class_type="nav2_core::Smoother">
         <description>
@@ -11,6 +11,13 @@
             base_class_type="nav2_core::Smoother">
         <description>
             ESDF + g2o trajectory smoother skeleton
+        </description>
+    </class>
+    <class name="my_nav2_smoother/MyGradientSmoother"
+            type="my_nav2_smoother::MyGradientSmoother"
+            base_class_type="nav2_core::Smoother">
+        <description>
+            Gradient trajectory smoother
         </description>
     </class>
 </library>
