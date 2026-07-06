@@ -1,5 +1,6 @@
 #include "my_nav2_smoother/esdf_g2o_smoother/esdf_g2o_smoother.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -55,26 +56,61 @@ bool EsdfG2oSmoother::smooth(
     nav_msgs::msg::Path &path,
     const rclcpp::Duration &/*max_time*/) {
 
-    if (path.poses.size() < 3)
-        return true;
+    const auto total_start_time = std::chrono::steady_clock::now();
+    auto logTiming =
+        [&](double backend_optimization_ms) {
 
-    TrajectoryPoints trajectory;
-    if (!initializeTrajectory(path, trajectory))
+            const auto total_end_time = std::chrono::steady_clock::now();
+            const double total_ms =
+                std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "ESDF g2o smoother timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
+                0.0,
+                backend_optimization_ms,
+                total_ms);
+        };
+
+    if (path.poses.size() < 3) {
+        logTiming(0.0);
         return true;
+    }
+
+    const auto backend_start_time = std::chrono::steady_clock::now();
+    TrajectoryPoints trajectory;
+    if (!initializeTrajectory(path, trajectory)) {
+        const double backend_optimization_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - backend_start_time).count();
+        logTiming(backend_optimization_ms);
+        return true;
+    }
 
     auto costmap = costmap_sub_ ? costmap_sub_->getCostmap() : nullptr;
     if (!esdf_map_.buildFromCostmap(costmap.get(), path, config_.esdf_margin)) {
         RCLCPP_WARN(node_->get_logger(), "ESDF g2o smoother failed to build ESDF map, keeping raw path");
+        const double backend_optimization_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - backend_start_time).count();
+        logTiming(backend_optimization_ms);
         return true;
     }
 
     const TrajectoryPoints reference_trajectory = trajectory;
     if (!optimizer_.optimize(trajectory, reference_trajectory, esdf_map_, config_)) {
         RCLCPP_DEBUG(node_->get_logger(), "ESDF g2o optimizer skeleton kept raw path");
+        const double backend_optimization_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - backend_start_time).count();
+        logTiming(backend_optimization_ms);
         return true;
     }
 
     updatePathFromTrajectory(path, trajectory);
+    const double backend_optimization_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - backend_start_time).count();
+    logTiming(backend_optimization_ms);
     return true;
 }
 

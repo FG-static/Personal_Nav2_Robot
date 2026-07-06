@@ -1,6 +1,7 @@
 #include "my_hybrid_astar_planner/hybrid_astar_planner.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iterator>
@@ -26,6 +27,7 @@ std::size_t StateKeyHasher::operator()(const StateKey &key) const {
     std::size_t seed = static_cast<std::size_t>(key.mx);
     seed = seed * 73856093U ^ static_cast<std::size_t>(key.my);
     seed = seed * 19349663U ^ static_cast<std::size_t>(key.theta_id);
+    seed = seed * 83492791U ^ static_cast<std::size_t>(key.direction_id);
     return seed;
 }
 
@@ -103,18 +105,13 @@ void MyHybridAStarPlanner::configure(
         params_.heuristic_yaw_weight,
         params_.heuristic_yaw_weight);
     declare_double_param(
+        "heuristic_goal_dist_weight",
+        params_.heuristic_goal_dist_weight,
+        params_.heuristic_goal_dist_weight);
+    declare_double_param(
         "path_tangent_change_weight",
         params_.path_tangent_change_weight,
         params_.path_tangent_change_weight);
-    declare_double_param("rs_weight", params_.rs_weight, params_.rs_weight);
-    declare_double_param(
-        "rs_reverse_penalty",
-        params_.rs_reverse_penalty,
-        params_.rs_reverse_penalty);
-    declare_double_param(
-        "rs_gear_switch_penalty",
-        params_.rs_gear_switch_penalty,
-        params_.rs_gear_switch_penalty);
     declare_double_param(
         "analytic_expansion_distance",
         params_.analytic_expansion_distance,
@@ -183,6 +180,21 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     if (!node_ || !costmap_)
         throw nav2_core::PlannerException("Planner is not configured");
 
+    const auto total_start_time = std::chrono::steady_clock::now();
+    auto logTiming =
+        [&](double front_end_search_ms, double backend_optimization_ms) {
+
+            const auto total_end_time = std::chrono::steady_clock::now();
+            const double total_ms =
+                std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "Hybrid A* timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
+                front_end_search_ms,
+                backend_optimization_ms,
+                total_ms);
+        };
+
     nav_msgs::msg::Path global_path;
     global_path.header.frame_id = global_frame_;
     global_path.header.stamp = node_->now();
@@ -190,6 +202,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     if (cancel_checker && cancel_checker()) {
 
         RCLCPP_WARN(node_->get_logger(), "Hybrid A* planning cancelled before search start");
+        logTiming(0.0, 0.0);
         return global_path;
     }
 
@@ -198,8 +211,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     unsigned int mx_goal = 0;
     unsigned int my_goal = 0;
     if (!validatePose(start, mx_start, my_start, "start") ||
-        !validatePose(goal, mx_goal, my_goal, "goal"))
+        !validatePose(goal, mx_goal, my_goal, "goal")) {
+        logTiming(0.0, 0.0);
         return global_path;
+    }
 
     const PlannerPose start_pose{start.pose.position.x, start.pose.position.y, poseToYaw(start)};
     const PlannerPose goal_pose{goal.pose.position.x, goal.pose.position.y, poseToYaw(goal)};
@@ -208,6 +223,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
         global_path.poses.push_back(start);
         global_path.poses.push_back(goal);
+        logTiming(0.0, 0.0);
         return global_path;
     }
 
@@ -235,6 +251,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
                 reused.header.frame_id = global_frame_;
                 reused.header.stamp = now;
+                logTiming(0.0, 0.0);
                 return reused;
             }
         }
@@ -245,9 +262,14 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         "Hybrid A* skeleton ready. Search phase will use %zu mecanum motion primitives.",
         motion_primitives_.size());
 
+    const auto front_end_start_time = std::chrono::steady_clock::now();
     if (!computeGridHeuristic(mx_goal, my_goal)) {
 
         RCLCPP_ERROR(node_->get_logger(), "Failed to build grid heuristic");
+        const double front_end_search_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - front_end_start_time).count();
+        logTiming(front_end_search_ms, 0.0);
         return global_path;
     }
 
@@ -279,15 +301,29 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::greater<OpenEntry>> open_list;
 
+    auto updateHeuristicTerms =
+        [&](HybridNode &node, const PlannerPose &pose) {
+
+            unsigned int mx = 0;
+            unsigned int my = 0;
+            node.h_grid = std::numeric_limits<double>::infinity();
+            if (costmap_ && costmap_->worldToMap(pose.x, pose.y, mx, my))
+                node.h_grid = params_.heuristic_grid_weight * getGridHeuristic(mx, my);
+
+            node.h_yaw = params_.heuristic_yaw_weight *
+                std::abs(normalizeAngle(goal_pose.yaw - pose.yaw));
+            node.h_goal_dist = params_.heuristic_goal_dist_weight *
+                std::hypot(goal_pose.x - pose.x, goal_pose.y - pose.y);
+            node.f = node.g + node.h_grid + node.h_yaw + node.h_goal_dist;
+        };
+
     // 起始节点
     HybridNode start_node;
     start_node.pose = start_pose;
     start_node.key = discretizeState(start_pose);
+    start_node.key.direction_id = static_cast<int>(MotionDirection::FORWARD);
     start_node.g = 0.0;
-    start_node.h_grid = computeNodeHeuristic(start_pose, goal_pose);
-    start_node.h_yaw = 0.0;
-    start_node.h_rs = 0.0;
-    start_node.f = start_node.g + start_node.h_grid;
+    updateHeuristicTerms(start_node, start_pose);
     if (!std::isfinite(start_node.f)) {
         RCLCPP_WARN(
             node_->get_logger(),
@@ -296,7 +332,11 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     nodes.push_back(start_node);
     node_lookup[start_node.key] = 0;
-    open_list.push({start_node.f, start_node.h_grid, start_node.g, 0});
+    open_list.push({
+        start_node.f,
+        start_node.h_grid + start_node.h_yaw + start_node.h_goal_dist,
+        start_node.g,
+        0});
 
     const rclcpp::Time search_start_time = node_->now();
     int expanded_iterations = 0;
@@ -307,6 +347,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         if (cancel_checker && cancel_checker()) {
 
             RCLCPP_WARN(node_->get_logger(), "Planning cancelled");
+            const double front_end_search_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - front_end_start_time).count();
+            logTiming(front_end_search_ms, 0.0);
             return nav_msgs::msg::Path{};
         }
 
@@ -317,6 +361,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 max_iterations,
                 nodes.size(),
                 open_list.size());
+            const double front_end_search_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - front_end_start_time).count();
+            logTiming(front_end_search_ms, 0.0);
             return global_path;
         }
 
@@ -329,6 +377,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 expanded_iterations,
                 nodes.size(),
                 open_list.size());
+            const double front_end_search_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - front_end_start_time).count();
+            logTiming(front_end_search_ms, 0.0);
             return global_path;
         }
 
@@ -340,6 +392,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 "Hybrid A* open list produced invalid node index %d, nodes=%zu",
                 cur_idx,
                 nodes.size());
+            const double front_end_search_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - front_end_start_time).count();
+            logTiming(front_end_search_ms, 0.0);
             return global_path;
         }
 
@@ -367,6 +423,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 expanded_iterations,
                 nodes.size(),
                 planned_path.poses.size());
+            const double front_end_search_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - front_end_start_time).count();
+            logTiming(front_end_search_ms, 0.0);
             return planned_path;
         }
 
@@ -379,6 +439,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 continue;
 
             StateKey next_key = discretizeState(next_pose);
+            next_key.direction_id = static_cast<int>(primitive.direction);
 
             unsigned int end_mx = 0;
             unsigned int end_my = 0;
@@ -419,6 +480,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                         max_node_count,
                         expanded_iterations,
                         open_list.size());
+                    const double front_end_search_ms =
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - front_end_start_time).count();
+                    logTiming(front_end_search_ms, 0.0);
                     return global_path;
                 }
 
@@ -428,15 +493,16 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 next_node.g = new_g;
                 next_node.parent_index = cur_idx;
                 next_node.parent_primitive_id = primitive.id;
-                next_node.h_grid = computeNodeHeuristic(next_pose, goal_pose);
-                next_node.h_yaw = 0.0;
-                next_node.h_rs = 0.0;
-                next_node.f = next_node.g + next_node.h_grid;
+                updateHeuristicTerms(next_node, next_pose);
 
                 const int new_index = static_cast<int>(nodes.size());
                 nodes.push_back(next_node);
                 node_lookup[next_key] = new_index;
-                open_list.push({next_node.f, next_node.h_grid, next_node.g, new_index});
+                open_list.push({
+                    next_node.f,
+                    next_node.h_grid + next_node.h_yaw + next_node.h_goal_dist,
+                    next_node.g,
+                    new_index});
             } else { // 非同一路径拓展过的
 
                 HybridNode &old_node = nodes[it->second];
@@ -446,12 +512,13 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                     old_node.g = new_g;
                     old_node.parent_index = cur_idx;
                     old_node.parent_primitive_id = primitive.id;
-                    old_node.h_grid = computeNodeHeuristic(next_pose, goal_pose);
-                    old_node.h_yaw = 0.0;
-                    old_node.h_rs = 0.0;
-                    old_node.f = old_node.g + old_node.h_grid;
+                    updateHeuristicTerms(old_node, next_pose);
 
-                    open_list.push({old_node.f, old_node.h_grid, old_node.g, it->second});
+                    open_list.push({
+                        old_node.f,
+                        old_node.h_grid + old_node.h_yaw + old_node.h_goal_dist,
+                        old_node.g,
+                        it->second});
                 }
             }
         }
@@ -463,6 +530,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         (node_->now() - search_start_time).seconds(),
         expanded_iterations,
         nodes.size());
+    const double front_end_search_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - front_end_start_time).count();
+    logTiming(front_end_search_ms, 0.0);
     return global_path;
 }
 
@@ -899,10 +970,10 @@ double MyHybridAStarPlanner::computeNodeHeuristic(
 
     const double h_yaw = params_.heuristic_yaw_weight *
         std::abs(normalizeAngle(goal.yaw - pose.yaw));
-    const double h_rs = params_.rs_weight *
+    const double h_goal_dist = params_.heuristic_goal_dist_weight *
         std::hypot(goal.x - pose.x, goal.y - pose.y);
 
-    return h_grid + h_yaw + h_rs;
+    return h_grid + h_yaw + h_goal_dist;
 }
 
 const MotionPrimitive * MyHybridAStarPlanner::findMotionPrimitiveById(int primitive_id) const {
@@ -944,8 +1015,10 @@ bool MyHybridAStarPlanner::simulatePrimitive(
 
         const unsigned char cost = costmap_->getCost(mx, my);
         if (cost == nav2_costmap_2d::NO_INFORMATION) {
+
             transition_cost += params_.unknown_cost;
         } else {
+
             transition_cost += params_.obstacle_cost_weight *
                 static_cast<double>(cost) /
                 static_cast<double>(nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);

@@ -36,6 +36,7 @@ include_directories(
 # 编译动态库 (Shared Library)
 add_library(${PROJECT_NAME}_lib SHARED
   src/bspline_smoother.cpp
+  src/gradient_smoother.cpp
   src/esdf_g2o_smoother/esdf_map.cpp
   src/esdf_g2o_smoother/esdf_g2o_optimizer.cpp
   src/esdf_g2o_smoother/esdf_g2o_smoother.cpp

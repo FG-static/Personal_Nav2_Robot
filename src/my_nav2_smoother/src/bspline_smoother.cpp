@@ -4,6 +4,7 @@
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <nav2_util/node_utils.hpp>
 #include <rclcpp/parameter_value.hpp>
@@ -158,15 +159,41 @@ namespace my_bspline_smoother {
         const rclcpp::Duration &/*max_time*/
     ) {
 
-        if (path.poses.size() < 4)
+        const auto total_start_time = std::chrono::steady_clock::now();
+        auto logTiming =
+            [&](double backend_optimization_ms) {
+
+                const auto total_end_time = std::chrono::steady_clock::now();
+                const double total_ms =
+                    std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "B-Spline smoother timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
+                    0.0,
+                    backend_optimization_ms,
+                    total_ms);
+            };
+
+        if (path.poses.size() < 4) {
+            logTiming(0.0);
             return true;
+        }
 
         nav_msgs::msg::Path raw_path = path;
+        const auto backend_start_time = std::chrono::steady_clock::now();
         if (!applyBSplineAlgorithm(path, raw_path)) {
             path = raw_path;
+            const double backend_optimization_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - backend_start_time).count();
+            logTiming(backend_optimization_ms);
             return false;
         }
 
+        const double backend_optimization_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - backend_start_time).count();
+        logTiming(backend_optimization_ms);
         return true;
     }
     bool MyBSplineSmoother::applyBSplineAlgorithm(

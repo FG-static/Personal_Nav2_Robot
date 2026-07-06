@@ -3,6 +3,8 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
+#include <chrono>
+
 namespace my_nav2_smoother {
 
     void MyGradientSmoother::configure(
@@ -33,10 +35,34 @@ namespace my_nav2_smoother {
         const rclcpp::Duration &/*max_time*/
     ) {
 
-        if (path.poses.size() < 3) return true;
+        const auto total_start_time = std::chrono::steady_clock::now();
+        auto logTiming =
+            [&](double backend_optimization_ms) {
+
+                const auto total_end_time = std::chrono::steady_clock::now();
+                const double total_ms =
+                    std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "Gradient smoother timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
+                    0.0,
+                    backend_optimization_ms,
+                    total_ms);
+            };
+
+        if (path.poses.size() < 3) {
+            logTiming(0.0);
+            return true;
+        }
+
         nav_msgs::msg::Path raw_path = path;
 
+        const auto backend_start_time = std::chrono::steady_clock::now();
         applyGradientDescent(path, raw_path);
+        const double backend_optimization_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - backend_start_time).count();
+        logTiming(backend_optimization_ms);
 
         return true;
     }

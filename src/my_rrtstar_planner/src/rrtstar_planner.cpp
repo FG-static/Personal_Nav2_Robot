@@ -3,6 +3,7 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <unordered_map>
 
@@ -98,6 +99,21 @@ namespace my_rrtstar_planner {
         const geometry_msgs::msg::PoseStamped &goal,
         std::function<bool()> /*cancel_checker*/) {
 
+        const auto total_start_time = std::chrono::steady_clock::now();
+        auto logTiming =
+            [&](double front_end_search_ms, double backend_optimization_ms) {
+
+                const auto total_end_time = std::chrono::steady_clock::now();
+                const double total_ms =
+                    std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "RRT* timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
+                    front_end_search_ms,
+                    backend_optimization_ms,
+                    total_ms);
+            };
+
         nav_msgs::msg::Path global_path;
         global_path.header.frame_id = global_frame_;
         global_path.header.stamp = node_->now();
@@ -108,13 +124,13 @@ namespace my_rrtstar_planner {
             !costmap_->worldToMap(goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal)) {
 
             RCLCPP_ERROR(node_->get_logger(), "Start or Goal is outside of costmap bounds");
+            logTiming(0.0, 0.0);
             return global_path;
         }
 
         // 路径规划
         int width = costmap_->getSizeInCellsX(), 
             height = costmap_->getSizeInCellsY();
-        int map_size = width * height;
         // 将米为单位的参数转换为地图格子数，保持单位一致
         double 
             resolution = costmap_->getResolution(),
@@ -135,7 +151,9 @@ namespace my_rrtstar_planner {
         // 开始寻路
         int stop_iter = 0; // 优化迭代计数器
         // 记录算法耗时
-        auto start_time = std::chrono::steady_clock::now();
+        auto search_start_time = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point first_solution_time;
+        bool has_first_solution_time = false;
         for (int iter = 0; iter < max_iterations_; ++ iter) {
 
             // 如果找到更优路径，更新 best_cost 和 found_path
@@ -203,7 +221,9 @@ namespace my_rrtstar_planner {
                 new_my = parent_my + static_cast<int>(round(dy));
             
             // 检查是否在地图范围内
-            if (new_mx >= width || new_my >= height) continue;
+            if (new_mx >= static_cast<unsigned int>(width) ||
+                new_my >= static_cast<unsigned int>(height))
+                continue;
                 
             int new_idx = new_my * width + new_mx;
 
@@ -267,11 +287,15 @@ namespace my_rrtstar_planner {
             if (dist_to_goal_sqrd < goal_tolerance_cells * goal_tolerance_cells) {
 
                 // 检查到目标的路径是否碰撞
-                if (isCollisionFreePath(new_idx, goal_idx)) {
+	                if (isCollisionFreePath(new_idx, goal_idx)) {
 
-                    found_path = true;
-                    if (stop_iter == 0) RCLCPP_INFO(node_->get_logger(), "RRT* found a path to the goal in %d iterations, now optimizing...", iter + 1);
-                    RCLCPP_INFO(node_->get_logger(), "RRT* successfully found a path to the goal in %d iterations", iter + 1);
+	                    found_path = true;
+	                    if (stop_iter == 0) {
+                            first_solution_time = std::chrono::steady_clock::now();
+                            has_first_solution_time = true;
+                            RCLCPP_INFO(node_->get_logger(), "RRT* found a path to the goal in %d iterations, now optimizing...", iter + 1);
+                        }
+	                    RCLCPP_INFO(node_->get_logger(), "RRT* successfully found a path to the goal in %d iterations", iter + 1);
                     double cost_to_goal = cost_to_new_node + std::sqrt(dist_to_goal_sqrd);
                     if (cost_to_goal < best_cost) {
 
@@ -291,10 +315,13 @@ namespace my_rrtstar_planner {
                 }
             }
         }
-        // 记录算法耗时
-        auto end_time = std::chrono::steady_clock::now();
-        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
-        RCLCPP_INFO(node_->get_logger(), "RRT* planning completed in %ld ms", duration_ms);
+        const auto search_end_time = std::chrono::steady_clock::now();
+        const double front_end_search_ms = has_first_solution_time ?
+            std::chrono::duration<double, std::milli>(first_solution_time - search_start_time).count() :
+            std::chrono::duration<double, std::milli>(search_end_time - search_start_time).count();
+        const double backend_optimization_ms = has_first_solution_time ?
+            std::chrono::duration<double, std::milli>(search_end_time - first_solution_time).count() :
+            0.0;
 
         if (found_path && goal_node_idx != -1) {
 
@@ -345,6 +372,7 @@ namespace my_rrtstar_planner {
             global_path.poses.clear();
             RCLCPP_WARN(node_->get_logger(), "RRT* failed to find a path from start to goal");
         }
+        logTiming(front_end_search_ms, backend_optimization_ms);
         return global_path;
     }
 

@@ -42,12 +42,14 @@ struct StateKey {
     int mx = 0;
     int my = 0;
     int theta_id = 0;
+    int direction_id = 0;
 
     bool operator==(const StateKey &other) const {
 
         return mx == other.mx &&
                my == other.my &&
-               theta_id == other.theta_id;
+               theta_id == other.theta_id &&
+               direction_id == other.direction_id;
     }
 };
 
@@ -89,7 +91,7 @@ struct HybridNode {
     double g = std::numeric_limits<double>::infinity(); // 累计
     double h_grid = std::numeric_limits<double>::infinity(); // 剩余估计代价
     double h_yaw = 0.0;
-    double h_rs = 0.0; // reed_shepp 代价
+    double h_goal_dist = 0.0; // 到目标点的欧氏距离启发
     double f = std::numeric_limits<double>::infinity(); // 总
     int parent_index = -1;
     int parent_primitive_id = -1;
@@ -116,10 +118,8 @@ struct PlannerParams {
     double goal_tolerance_yaw = 0.2;
     double heuristic_grid_weight = 1.0;
     double heuristic_yaw_weight = 0.2;
+    double heuristic_goal_dist_weight = 0.3;
     double path_tangent_change_weight = 0.2;
-    double rs_weight = 0.15;
-    double rs_reverse_penalty = 0.4;
-    double rs_gear_switch_penalty = 0.2;
     double analytic_expansion_distance = 2.0;
     double replan_time_threshold = 2.0;
     double path_prune_distance = 0.15;
