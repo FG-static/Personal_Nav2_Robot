@@ -125,6 +125,10 @@ void MyHybridAStarPlanner::configure(
         params_.velocity_direction_change_weight,
         params_.velocity_direction_change_weight);
     declare_double_param(
+        "primitive_omega_change_weight",
+        params_.primitive_omega_change_weight,
+        params_.primitive_omega_change_weight);
+    declare_double_param(
         "goal_progress_weight",
         params_.goal_progress_weight,
         params_.goal_progress_weight);
@@ -136,6 +140,22 @@ void MyHybridAStarPlanner::configure(
         "angular_motion_weight",
         params_.angular_motion_weight,
         params_.angular_motion_weight);
+    declare_int_param(
+        "primitive_translation_angle_count",
+        params_.primitive_translation_angle_count,
+        params_.primitive_translation_angle_count);
+    declare_int_param(
+        "primitive_omega_sample_count",
+        params_.primitive_omega_sample_count,
+        params_.primitive_omega_sample_count);
+    declare_double_param(
+        "primitive_speed_ratio",
+        params_.primitive_speed_ratio,
+        params_.primitive_speed_ratio);
+    declare_bool_param(
+        "include_pure_rotation_primitives",
+        params_.include_pure_rotation_primitives,
+        params_.include_pure_rotation_primitives);
     declare_double_param(
         "analytic_expansion_distance",
         params_.analytic_expansion_distance,
@@ -345,7 +365,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     HybridNode start_node;
     start_node.pose = start_pose;
     start_node.key = discretizeState(start_pose);
-    start_node.key.direction_id = static_cast<int>(MotionDirection::FORWARD);
+    start_node.key.direction_id = static_cast<int>(MotionDirection::TRANSLATE);
     start_node.g = 0.0;
     updateHeuristicTerms(start_node, start_pose);
     if (!std::isfinite(start_node.f)) {
@@ -778,49 +798,54 @@ void MyHybridAStarPlanner::buildMotionPrimitives() {
 
     motion_primitives_.clear();
     int primitive_id = 0;
-    const double vx = params_.max_vel_x;
-    const double vy = params_.max_vel_y;
-    const double omega = params_.max_vel_theta;
 
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, vx, 0.0, 0.0, MotionDirection::FORWARD));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, vx, vy, 0.0, MotionDirection::FORWARD));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, vx, -vy, 0.0, MotionDirection::FORWARD));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, vy, 0.0, MotionDirection::LATERAL_LEFT));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, -vy, 0.0, MotionDirection::LATERAL_RIGHT));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, vx, 0.0, omega, MotionDirection::FORWARD));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, vx, 0.0, -omega, MotionDirection::FORWARD));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, vy, omega, MotionDirection::LATERAL_LEFT));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, vy, -omega, MotionDirection::LATERAL_LEFT));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, -vy, omega, MotionDirection::LATERAL_RIGHT));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, -vy, -omega, MotionDirection::LATERAL_RIGHT));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, 0.0, omega, MotionDirection::ROTATE));
-    motion_primitives_.push_back(makePrimitive(
-        primitive_id ++, 0.0, 0.0, -omega, MotionDirection::ROTATE));
+    const int angle_count = std::max(1, params_.primitive_translation_angle_count);
+    const int omega_sample_count = params_.primitive_omega_sample_count;
+    const double speed_ratio = std::clamp(params_.primitive_speed_ratio, 0.0, 1.0);
+    const double max_omega = params_.max_vel_theta;
 
-    if (params_.allow_reverse) {
+    std::vector<double> omega_samples;
+    if (omega_sample_count <= 1) {
+
+        omega_samples.push_back(0.0);
+    } else {
+
+        if (omega_sample_count != 3) {
+
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "primitive_omega_sample_count=%d is not supported in stage 1, using {-max, 0, +max}",
+                omega_sample_count);
+        }
+        omega_samples.push_back(-max_omega);
+        omega_samples.push_back(0.0);
+        omega_samples.push_back(max_omega);
+    }
+
+    const double two_pi = 2.0 * std::acos(-1.0);
+    for (int angle_id = 0; angle_id < angle_count; ++ angle_id) {
+
+        const double angle = two_pi * static_cast<double>(angle_id) /
+            static_cast<double>(angle_count);
+        const double v_x = speed_ratio * params_.max_vel_x * std::cos(angle);
+        const double v_y = speed_ratio * params_.max_vel_y * std::sin(angle);
+
+        if (std::hypot(v_x, v_y) <= 1e-6)
+            continue;
+
+        for (const double omega : omega_samples) {
+
+            motion_primitives_.push_back(makePrimitive(
+                primitive_id ++, v_x, v_y, omega, MotionDirection::TRANSLATE));
+        }
+    }
+
+    if (params_.include_pure_rotation_primitives && std::abs(max_omega) > 1e-6) {
 
         motion_primitives_.push_back(makePrimitive(
-            primitive_id ++, -vx, 0.0, 0.0, MotionDirection::REVERSE));
+            primitive_id ++, 0.0, 0.0, max_omega, MotionDirection::ROTATE));
         motion_primitives_.push_back(makePrimitive(
-            primitive_id ++, -vx, vy, 0.0, MotionDirection::REVERSE));
-        motion_primitives_.push_back(makePrimitive(
-            primitive_id ++, -vx, -vy, 0.0, MotionDirection::REVERSE));
-        motion_primitives_.push_back(makePrimitive(
-            primitive_id ++, -vx, 0.0, omega, MotionDirection::REVERSE));
-        motion_primitives_.push_back(makePrimitive(
-            primitive_id ++, -vx, 0.0, -omega, MotionDirection::REVERSE));
+            primitive_id ++, 0.0, 0.0, -max_omega, MotionDirection::ROTATE));
     }
 }
 
@@ -1027,14 +1052,17 @@ double MyHybridAStarPlanner::computePrimitiveSwitchCost(
     if (previous_primitive->id != next_primitive.id)
         switch_cost += params_.primitive_switch_weight;
 
-    if (previous_primitive->direction != next_primitive.direction)
-        switch_cost += params_.direction_switch_weight;
-
     const double prev_speed =
         std::hypot(previous_primitive->v_x, previous_primitive->v_y);
     const double next_speed =
         std::hypot(next_primitive.v_x, next_primitive.v_y);
-    if (prev_speed > 1e-6 && next_speed > 1e-6) {
+    const bool prev_translate = prev_speed > 1e-6;
+    const bool next_translate = next_speed > 1e-6;
+
+    if (prev_translate != next_translate)
+        switch_cost += params_.direction_switch_weight;
+
+    if (prev_translate && next_translate) {
 
         const double prev_angle =
             std::atan2(previous_primitive->v_y, previous_primitive->v_x);
@@ -1043,6 +1071,9 @@ double MyHybridAStarPlanner::computePrimitiveSwitchCost(
         switch_cost += params_.velocity_direction_change_weight *
             std::abs(normalizeAngle(next_angle - prev_angle));
     }
+
+    switch_cost += params_.primitive_omega_change_weight * params_.primitive_duration *
+        std::abs(next_primitive.omega - previous_primitive->omega);
 
     return switch_cost;
 }

@@ -30,11 +30,8 @@ struct PlannerPose {
 // 运动模式
 enum class MotionDirection {
 
-    FORWARD = 0,
-    REVERSE = 1,
-    LATERAL_LEFT = 2,
-    LATERAL_RIGHT = 3,
-    ROTATE = 4
+    TRANSLATE = 0,
+    ROTATE = 1
 };
 
 struct StateKey {
@@ -80,7 +77,7 @@ struct MotionPrimitive {
     double omega = 0.0;
     double duration = 0.0;
     double travel_cost = 0.0;
-    MotionDirection direction = MotionDirection::FORWARD;
+    MotionDirection direction = MotionDirection::TRANSLATE;
     std::vector<MotionSample> samples;
 };
 
@@ -123,9 +120,14 @@ struct PlannerParams {
     double primitive_switch_weight = 0.2;
     double direction_switch_weight = 0.5;
     double velocity_direction_change_weight = 0.5;
+    double primitive_omega_change_weight = 0.3;
     double goal_progress_weight = 2.0;
     double goal_direction_weight = 0.5;
     double angular_motion_weight = 0.3;
+    int primitive_translation_angle_count = 16;
+    int primitive_omega_sample_count = 3;
+    double primitive_speed_ratio = 1.0;
+    bool include_pure_rotation_primitives = true;
     double analytic_expansion_distance = 2.0;
     double replan_time_threshold = 2.0;
     double path_prune_distance = 0.15;
