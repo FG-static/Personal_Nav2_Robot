@@ -120,6 +120,12 @@ struct PlannerParams {
     double heuristic_yaw_weight = 0.2;
     double heuristic_goal_dist_weight = 0.3;
     double path_tangent_change_weight = 0.2;
+    double primitive_switch_weight = 0.2;
+    double direction_switch_weight = 0.5;
+    double velocity_direction_change_weight = 0.5;
+    double goal_progress_weight = 2.0;
+    double goal_direction_weight = 0.5;
+    double angular_motion_weight = 0.3;
     double analytic_expansion_distance = 2.0;
     double replan_time_threshold = 2.0;
     double path_prune_distance = 0.15;
@@ -180,6 +186,15 @@ private:
     bool isCellTraversable(unsigned int mx, unsigned int my) const;
     double computeNodeHeuristic(const PlannerPose &pose, const PlannerPose &goal) const;
     const MotionPrimitive* findMotionPrimitiveById(int primitive_id) const;
+    double computePrimitiveSwitchCost(
+        const HybridNode &current,
+        const MotionPrimitive &next_primitive
+    ) const;
+    double computeGoalDirectedCost(
+        const PlannerPose &current,
+        const PlannerPose &next,
+        const PlannerPose &goal
+    ) const;
     bool simulatePrimitive(
         const HybridNode &current,
         const MotionPrimitive &primitive,

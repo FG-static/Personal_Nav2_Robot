@@ -271,14 +271,20 @@ planner_server:
       interpolation_resolution: 0.1
       # Hybrid A*
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
-      primitive_duration: 0.30
+      primitive_duration: 0.25
       step_time: 0.025
       yaw_bin_count: 72 # 朝向离散桶数
       max_planning_time: 3.0
       heuristic_grid_weight: 1.2 # h_2D 代价函数权重
-      heuristic_yaw_weight: 0.5 # 姿态误差权重
+      heuristic_yaw_weight: 0.2 # 姿态误差启发权重，主要旋转代价转入 g
       heuristic_goal_dist_weight: 0.8 # 目标欧氏距离启发权重
-      path_tangent_change_weight: 1.2 # 相邻路径切线变化惩罚权重
+      path_tangent_change_weight: 1.0 # 相邻路径切线变化惩罚权重
+      primitive_switch_weight: 0.2 # 切换不同运动原语的基础惩罚
+      direction_switch_weight: 0.5 # 切换运动方向枚举的惩罚
+      velocity_direction_change_weight: 1.2 # 连续平移速度方向变化惩罚
+      goal_progress_weight: 1.5 # 远离目标的边代价惩罚
+      goal_direction_weight: 0.25 # 当前步移动方向偏离目标方向的边代价惩罚
+      angular_motion_weight: 0.3 # 旋转运动执行代价权重
       reuse_path_if_valid: true
       immediate_replan_if_blocked: true
       replan_time_threshold: 5.0

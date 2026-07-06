@@ -113,6 +113,30 @@ void MyHybridAStarPlanner::configure(
         params_.path_tangent_change_weight,
         params_.path_tangent_change_weight);
     declare_double_param(
+        "primitive_switch_weight",
+        params_.primitive_switch_weight,
+        params_.primitive_switch_weight);
+    declare_double_param(
+        "direction_switch_weight",
+        params_.direction_switch_weight,
+        params_.direction_switch_weight);
+    declare_double_param(
+        "velocity_direction_change_weight",
+        params_.velocity_direction_change_weight,
+        params_.velocity_direction_change_weight);
+    declare_double_param(
+        "goal_progress_weight",
+        params_.goal_progress_weight,
+        params_.goal_progress_weight);
+    declare_double_param(
+        "goal_direction_weight",
+        params_.goal_direction_weight,
+        params_.goal_direction_weight);
+    declare_double_param(
+        "angular_motion_weight",
+        params_.angular_motion_weight,
+        params_.angular_motion_weight);
+    declare_double_param(
         "analytic_expansion_distance",
         params_.analytic_expansion_distance,
         params_.analytic_expansion_distance);
@@ -447,7 +471,9 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 continue;
 
             // Penalize abrupt changes between consecutive path tangents.
-            double new_g = current_node.g + transition_cost;
+            double new_g = current_node.g + transition_cost +
+                computePrimitiveSwitchCost(current_node, primitive) +
+                computeGoalDirectedCost(current_node.pose, next_pose, goal_pose);
             if (current_node.parent_index >= 0) {
 
                 const auto &parrent_node = nodes[current_node.parent_index];
@@ -815,7 +841,7 @@ MotionPrimitive MyHybridAStarPlanner::makePrimitive(
     primitive.direction = direction;
     primitive.travel_cost =
         params_.primitive_duration * std::hypot(v_x, v_y) +
-        0.1 * params_.primitive_duration * std::abs(omega); // 执行代价
+        params_.angular_motion_weight * params_.primitive_duration * std::abs(omega); // 执行代价
 
     PlannerPose pose;
     const int steps = std::max(
@@ -985,6 +1011,68 @@ const MotionPrimitive * MyHybridAStarPlanner::findMotionPrimitiveById(int primit
     }
 
     return nullptr;
+}
+
+double MyHybridAStarPlanner::computePrimitiveSwitchCost(
+    const HybridNode &current,
+    const MotionPrimitive &next_primitive
+) const {
+
+    const MotionPrimitive *previous_primitive =
+        findMotionPrimitiveById(current.parent_primitive_id);
+    if (previous_primitive == nullptr)
+        return 0.0;
+
+    double switch_cost = 0.0;
+    if (previous_primitive->id != next_primitive.id)
+        switch_cost += params_.primitive_switch_weight;
+
+    if (previous_primitive->direction != next_primitive.direction)
+        switch_cost += params_.direction_switch_weight;
+
+    const double prev_speed =
+        std::hypot(previous_primitive->v_x, previous_primitive->v_y);
+    const double next_speed =
+        std::hypot(next_primitive.v_x, next_primitive.v_y);
+    if (prev_speed > 1e-6 && next_speed > 1e-6) {
+
+        const double prev_angle =
+            std::atan2(previous_primitive->v_y, previous_primitive->v_x);
+        const double next_angle =
+            std::atan2(next_primitive.v_y, next_primitive.v_x);
+        switch_cost += params_.velocity_direction_change_weight *
+            std::abs(normalizeAngle(next_angle - prev_angle));
+    }
+
+    return switch_cost;
+}
+
+double MyHybridAStarPlanner::computeGoalDirectedCost(
+    const PlannerPose &current,
+    const PlannerPose &next,
+    const PlannerPose &goal
+) const {
+
+    double cost = 0.0;
+    const double current_goal_dist = std::hypot(goal.x - current.x, goal.y - current.y);
+    const double next_goal_dist = std::hypot(goal.x - next.x, goal.y - next.y);
+    if (next_goal_dist > current_goal_dist) {
+
+        cost += params_.goal_progress_weight * (next_goal_dist - current_goal_dist);
+    }
+
+    const double step_x = next.x - current.x;
+    const double step_y = next.y - current.y;
+    const double step_dist = std::hypot(step_x, step_y);
+    if (step_dist > 1e-6 && current_goal_dist > 1e-6) {
+
+        const double move_yaw = std::atan2(step_y, step_x);
+        const double goal_yaw = std::atan2(goal.y - current.y, goal.x - current.x);
+        const double direction_error = std::abs(normalizeAngle(move_yaw - goal_yaw));
+        cost += params_.goal_direction_weight * direction_error * step_dist;
+    }
+
+    return cost;
 }
 
 bool MyHybridAStarPlanner::simulatePrimitive(
