@@ -273,23 +273,28 @@ planner_server:
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       primitive_duration: 0.25
       step_time: 0.025
-      yaw_bin_count: 72 # 朝向离散桶数
+      yaw_bin_count: 36 # 朝向离散桶数
       max_planning_time: 3.0
       heuristic_grid_weight: 1.2 # h_2D 代价函数权重
       heuristic_yaw_weight: 0.2 # 姿态误差启发权重，主要旋转代价转入 g
-      heuristic_goal_dist_weight: 0.8 # 目标欧氏距离启发权重
+      heuristic_goal_dist_weight: 0.4 # 目标欧氏距离启发权重
       path_tangent_change_weight: 1.0 # 相邻路径切线变化惩罚权重
       primitive_switch_weight: 0.2 # 切换不同运动原语的基础惩罚
       direction_switch_weight: 0.5 # 平移和原地旋转模式切换惩罚
-      velocity_direction_change_weight: 1.2 # 连续平移速度方向变化惩罚
+      velocity_direction_change_weight: 1.5 # 连续平移速度方向变化惩罚
       primitive_omega_change_weight: 0.3 # 相邻 primitive 角速度变化惩罚
-      goal_progress_weight: 1.5 # 远离目标的边代价惩罚
-      goal_direction_weight: 0.25 # 当前步移动方向偏离目标方向的边代价惩罚
+      goal_progress_weight: 1.3 # 远离目标的边代价惩罚
+      goal_direction_weight: 0.2 # 当前步移动方向偏离目标方向的边代价惩罚
       angular_motion_weight: 0.3 # 旋转运动执行代价权重
-      primitive_translation_angle_count: 16 # 麦轮平移方向采样数量
-      primitive_omega_sample_count: 3 # omega 采样档位：1 表示只平移，3 表示 -max/0/max
+      primitive_translation_angle_count: 32 # 麦轮平移方向采样数量
+      primitive_omega_sample_count: 1 # omega 采样档位：1 表示只平移，3 表示 -max/0/max
       primitive_speed_ratio: 1.0 # 平移 primitive 使用的最大速度比例
       include_pure_rotation_primitives: true # 是否额外加入原地旋转 primitive
+      visualize_primitive_costs: true # 发布根节点下一周期所有 primitive 的代价分布
+      primitive_cost_frame: "base_link" # 调试图使用的机器人局部坐标系
+      primitive_cost_show_text: true # 显示 primitive 编号与最终 f 代价
+      primitive_cost_marker_z: 0.05 # 调试图相对局部坐标系的高度
+      primitive_cost_publish_rate: 5.0 # 实时局部代价刷新频率，0 表示仅在全局规划时发布
       reuse_path_if_valid: true
       immediate_replan_if_blocked: true
       replan_time_threshold: 5.0

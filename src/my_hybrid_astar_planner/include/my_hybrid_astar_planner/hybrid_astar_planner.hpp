@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rm_interfaces/msg/replan_event.hpp"
 #include "tf2_ros/buffer.h"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 namespace my_hybrid_astar_planner {
 
@@ -95,6 +97,24 @@ struct HybridNode {
     bool closed = false;
 };
 
+// 单个 primitive 在当前扩展节点下的真实代价分解
+struct PrimitiveCostDebug {
+
+    int primitive_id = -1;
+    bool feasible = false;
+    bool accepted = false;
+    double travel_cost = 0.0;
+    double obstacle_cost = 0.0;
+    double switch_cost = 0.0;
+    double goal_directed_cost = 0.0;
+    double tangent_change_cost = 0.0;
+    double delta_g = std::numeric_limits<double>::infinity();
+    double h_grid = std::numeric_limits<double>::infinity();
+    double h_yaw = 0.0;
+    double h_goal_dist = 0.0;
+    double score = std::numeric_limits<double>::infinity();
+};
+
 struct PlannerParams {
 
     double unknown_cost = 5.0;
@@ -135,6 +155,11 @@ struct PlannerParams {
     double max_planning_time = 1.0;
     bool immediate_replan_if_blocked = true;
     bool reuse_path_if_valid = true;
+    bool visualize_primitive_costs = true;
+    std::string primitive_cost_frame = "base_link";
+    bool primitive_cost_show_text = true;
+    double primitive_cost_marker_z = 0.05;
+    double primitive_cost_publish_rate = 5.0;
 };
 
 class MyHybridAStarPlanner : public nav2_core::GlobalPlanner {
@@ -187,6 +212,11 @@ private:
     double getGridHeuristic(unsigned int mx, unsigned int my) const;
     bool isCellTraversable(unsigned int mx, unsigned int my) const;
     double computeNodeHeuristic(const PlannerPose &pose, const PlannerPose &goal) const;
+    void updateHeuristicTerms(
+        HybridNode &node,
+        const PlannerPose &pose,
+        const PlannerPose &goal
+    ) const;
     const MotionPrimitive* findMotionPrimitiveById(int primitive_id) const;
     double computePrimitiveSwitchCost(
         const HybridNode &current,
@@ -196,6 +226,11 @@ private:
         const PlannerPose &current,
         const PlannerPose &next,
         const PlannerPose &goal
+    ) const;
+    double computePathTangentChangeCost(
+        const PlannerPose &previous,
+        const PlannerPose &current,
+        const PlannerPose &next
     ) const;
     bool simulatePrimitive(
         const HybridNode &current,
@@ -228,10 +263,26 @@ private:
         const geometry_msgs::msg::PoseStamped &goal,
         const builtin_interfaces::msg::Time &candidate_path_stamp
     );
+    int findFirstPrimitiveId(
+        const std::vector<HybridNode> &nodes,
+        int goal_index
+    ) const;
+    std::vector<PrimitiveCostDebug> evaluatePrimitiveCostsAtPose(
+        const PlannerPose &current_pose,
+        const PlannerPose &goal_pose
+    ) const;
+    void updatePrimitiveCostVisualization();
+    void publishPrimitiveCostVisualization(
+        const std::vector<PrimitiveCostDebug> &costs,
+        int selected_primitive_id,
+        bool realtime = false
+    ) const;
 
     std::shared_ptr<tf2_ros::Buffer> tf_;
     nav2_util::LifecycleNode::SharedPtr node_;
     rclcpp::Publisher<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr primitive_cost_pub_;
+    rclcpp::TimerBase::SharedPtr primitive_cost_timer_;
     nav2_costmap_2d::Costmap2D *costmap_{nullptr};
     std::string global_frame_;
     std::string name_;
@@ -243,6 +294,9 @@ private:
     bool has_last_path_{false};
     rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};
     uint64_t replan_event_id_{0};
+    PlannerPose primitive_cost_goal_;
+    bool has_primitive_cost_goal_{false};
+    std::mutex planning_mutex_;
 };
 
 } // namespace my_hybrid_astar_planner

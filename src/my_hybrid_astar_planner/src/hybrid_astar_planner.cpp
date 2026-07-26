@@ -4,9 +4,11 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <queue>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -14,12 +16,48 @@
 #include "nav2_core/planner_exceptions.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
+#include "std_msgs/msg/color_rgba.hpp"
+#include "tf2/exceptions.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2/utils.h"
 
 using nav2_util::declare_parameter_if_not_declared;
 
 namespace my_hybrid_astar_planner {
+namespace {
+
+std_msgs::msg::ColorRGBA makeCostColor(double normalized_cost, double alpha) {
+
+    const double value = std::clamp(normalized_cost, 0.0, 1.0);
+    std_msgs::msg::ColorRGBA color;
+    color.a = static_cast<float>(alpha);
+
+    if (value < 0.25) {
+
+        color.r = 0.0F;
+        color.g = static_cast<float>(4.0 * value);
+        color.b = 1.0F;
+    } else if (value < 0.5) {
+
+        color.r = 0.0F;
+        color.g = 1.0F;
+        color.b = static_cast<float>(2.0 - 4.0 * value);
+    } else if (value < 0.75) {
+
+        color.r = static_cast<float>(4.0 * value - 2.0);
+        color.g = 1.0F;
+        color.b = 0.0F;
+    } else {
+
+        color.r = 1.0F;
+        color.g = static_cast<float>(4.0 - 4.0 * value);
+        color.b = 0.0F;
+    }
+
+    return color;
+}
+
+} // namespace
 
 // 哈希函数 用于快速查找已扩展节点索引
 std::size_t StateKeyHasher::operator()(const StateKey &key) const {
@@ -63,6 +101,12 @@ void MyHybridAStarPlanner::configure(
         };
     auto declare_bool_param =
         [&](const std::string &param_name, bool default_value, bool &target) {
+            declare_parameter_if_not_declared(
+                node_, name_ + "." + param_name, rclcpp::ParameterValue(default_value));
+            node_->get_parameter(name_ + "." + param_name, target);
+        };
+    auto declare_string_param =
+        [&](const std::string &param_name, const std::string &default_value, std::string &target) {
             declare_parameter_if_not_declared(
                 node_, name_ + "." + param_name, rclcpp::ParameterValue(default_value));
             node_->get_parameter(name_ + "." + param_name, target);
@@ -184,12 +228,46 @@ void MyHybridAStarPlanner::configure(
         "reuse_path_if_valid",
         params_.reuse_path_if_valid,
         params_.reuse_path_if_valid);
+    declare_bool_param(
+        "visualize_primitive_costs",
+        params_.visualize_primitive_costs,
+        params_.visualize_primitive_costs);
+    declare_string_param(
+        "primitive_cost_frame",
+        params_.primitive_cost_frame,
+        params_.primitive_cost_frame);
+    declare_bool_param(
+        "primitive_cost_show_text",
+        params_.primitive_cost_show_text,
+        params_.primitive_cost_show_text);
+    declare_double_param(
+        "primitive_cost_marker_z",
+        params_.primitive_cost_marker_z,
+        params_.primitive_cost_marker_z);
+    declare_double_param(
+        "primitive_cost_publish_rate",
+        params_.primitive_cost_publish_rate,
+        params_.primitive_cost_publish_rate);
+
+    primitive_cost_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "trajectory_generation/primitive_costs",
+        rclcpp::QoS(1).reliable().transient_local());
+    if (params_.visualize_primitive_costs && params_.primitive_cost_publish_rate > 0.0) {
+
+        const auto timer_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::duration<double>(1.0 / params_.primitive_cost_publish_rate));
+        primitive_cost_timer_ = node_->create_wall_timer(
+            timer_period,
+            std::bind(&MyHybridAStarPlanner::updatePrimitiveCostVisualization, this));
+        primitive_cost_timer_->cancel();
+    }
 
     buildMotionPrimitives();
 
     RCLCPP_INFO(
         node_->get_logger(),
-        "Mecanum Hybrid A* planner configured: yaw_bins=%d primitives=%zu max_vel=(%.2f, %.2f, %.2f) max_iter=%d max_time=%.2fs",
+        "Mecanum Hybrid A* planner configured: yaw_bins=%d primitives=%zu "
+        "max_vel=(%.2f, %.2f, %.2f) max_iter=%d max_time=%.2fs",
         params_.yaw_bin_count,
         motion_primitives_.size(),
         params_.max_vel_x,
@@ -197,21 +275,40 @@ void MyHybridAStarPlanner::configure(
         params_.max_vel_theta,
         params_.max_iterations,
         params_.max_planning_time);
+    if (params_.visualize_primitive_costs) {
+
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "Primitive cost visualization enabled on /trajectory_generation/primitive_costs "
+            "in frame '%s' at %.1f Hz",
+            params_.primitive_cost_frame.c_str(),
+            params_.primitive_cost_publish_rate);
+    }
 }
 
 void MyHybridAStarPlanner::activate() {
 
+    if (primitive_cost_timer_)
+        primitive_cost_timer_->reset();
     RCLCPP_INFO(node_->get_logger(), "Mecanum Hybrid A* planner activated");
 }
 
 void MyHybridAStarPlanner::deactivate() {
 
+    if (primitive_cost_timer_)
+        primitive_cost_timer_->cancel();
     RCLCPP_INFO(node_->get_logger(), "Mecanum Hybrid A* planner deactivated");
 }
 
 void MyHybridAStarPlanner::cleanup() {
 
+    if (primitive_cost_timer_)
+        primitive_cost_timer_->cancel();
+    std::lock_guard<std::mutex> lock(planning_mutex_);
+    primitive_cost_timer_.reset();
     motion_primitives_.clear();
+    primitive_cost_pub_.reset();
+    has_primitive_cost_goal_ = false;
     costmap_ = nullptr;
     RCLCPP_INFO(node_->get_logger(), "Mecanum Hybrid A* planner cleaned up");
 }
@@ -221,8 +318,10 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     const geometry_msgs::msg::PoseStamped &goal,
     std::function<bool()> cancel_checker) {
 
+    std::lock_guard<std::mutex> lock(planning_mutex_);
     if (!node_ || !costmap_)
         throw nav2_core::PlannerException("Planner is not configured");
+    has_primitive_cost_goal_ = false;
 
     const auto total_start_time = std::chrono::steady_clock::now();
     auto logTiming =
@@ -270,6 +369,8 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         logTiming(0.0, 0.0);
         return global_path;
     }
+    primitive_cost_goal_ = goal_pose;
+    has_primitive_cost_goal_ = true;
 
     const rclcpp::Time now = node_->now();
 
@@ -345,29 +446,13 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     std::priority_queue<OpenEntry, std::vector<OpenEntry>, std::greater<OpenEntry>> open_list;
 
-    auto updateHeuristicTerms =
-        [&](HybridNode &node, const PlannerPose &pose) {
-
-            unsigned int mx = 0;
-            unsigned int my = 0;
-            node.h_grid = std::numeric_limits<double>::infinity();
-            if (costmap_ && costmap_->worldToMap(pose.x, pose.y, mx, my))
-                node.h_grid = params_.heuristic_grid_weight * getGridHeuristic(mx, my);
-
-            node.h_yaw = params_.heuristic_yaw_weight *
-                std::abs(normalizeAngle(goal_pose.yaw - pose.yaw));
-            node.h_goal_dist = params_.heuristic_goal_dist_weight *
-                std::hypot(goal_pose.x - pose.x, goal_pose.y - pose.y);
-            node.f = node.g + node.h_grid + node.h_yaw + node.h_goal_dist;
-        };
-
     // 起始节点
     HybridNode start_node;
     start_node.pose = start_pose;
     start_node.key = discretizeState(start_pose);
     start_node.key.direction_id = static_cast<int>(MotionDirection::TRANSLATE);
     start_node.g = 0.0;
-    updateHeuristicTerms(start_node, start_pose);
+    updateHeuristicTerms(start_node, start_pose, goal_pose);
     if (!std::isfinite(start_node.f)) {
         RCLCPP_WARN(
             node_->get_logger(),
@@ -384,6 +469,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     const rclcpp::Time search_start_time = node_->now();
     int expanded_iterations = 0;
+    std::vector<PrimitiveCostDebug> root_primitive_costs;
 
     // 搜索
     while (!open_list.empty()) {
@@ -456,6 +542,12 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         if (isGoalReached(current_node.pose, goal_pose)) {
 
             nav_msgs::msg::Path planned_path = reconstructPath(nodes, cur_idx, start, goal);
+            if (!root_primitive_costs.empty()) {
+
+                publishPrimitiveCostVisualization(
+                    root_primitive_costs,
+                    findFirstPrimitiveId(nodes, cur_idx));
+            }
             last_path_ = planned_path;
             has_last_path_ = true;
             last_plan_time_ = now;
@@ -476,43 +568,71 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
         for (const auto &primitive : motion_primitives_) {
 
+            const bool capture_root_cost =
+                params_.visualize_primitive_costs && cur_idx == 0;
+            PrimitiveCostDebug debug_cost;
+            debug_cost.primitive_id = primitive.id;
+            debug_cost.travel_cost = primitive.travel_cost;
+            std::size_t debug_cost_index = std::numeric_limits<std::size_t>::max();
+
             PlannerPose next_pose;
             std::vector<PlannerPose> sampled_poses;
             double transition_cost = 0.0;
-            if (!simulatePrimitive(current_node, primitive, next_pose, sampled_poses, transition_cost))
+            if (!simulatePrimitive(current_node, primitive, next_pose, sampled_poses, transition_cost)) {
+
+                if (capture_root_cost)
+                    root_primitive_costs.push_back(debug_cost);
                 continue;
+            }
 
             StateKey next_key = discretizeState(next_pose);
             next_key.direction_id = static_cast<int>(primitive.direction);
 
             unsigned int end_mx = 0;
             unsigned int end_my = 0;
-            if (!costmap_->worldToMap(next_pose.x, next_pose.y, end_mx, end_my))
-                continue;
+            if (!costmap_->worldToMap(next_pose.x, next_pose.y, end_mx, end_my)) {
 
-            // Penalize abrupt changes between consecutive path tangents.
-            double new_g = current_node.g + transition_cost +
-                computePrimitiveSwitchCost(current_node, primitive) +
+                if (capture_root_cost)
+                    root_primitive_costs.push_back(debug_cost);
+                continue;
+            }
+
+            const double switch_cost =
+                computePrimitiveSwitchCost(current_node, primitive);
+            const double goal_directed_cost =
                 computeGoalDirectedCost(current_node.pose, next_pose, goal_pose);
+            double tangent_change_cost = 0.0;
             if (current_node.parent_index >= 0) {
 
-                const auto &parrent_node = nodes[current_node.parent_index];
+                tangent_change_cost = computePathTangentChangeCost(
+                    nodes[current_node.parent_index].pose,
+                    current_node.pose,
+                    next_pose);
+            }
 
-                const double
-                    v1x = current_node.pose.x - parrent_node.pose.x,
-                    v1y = current_node.pose.y - parrent_node.pose.y,
-                    v2x = next_pose.x - current_node.pose.x,
-                    v2y = next_pose.y - current_node.pose.y;
+            const double delta_g =
+                transition_cost + switch_cost + goal_directed_cost + tangent_change_cost;
+            const double new_g = current_node.g + delta_g;
 
-                if (std::hypot(v1x, v1y) > 1e-6 &&
-                    std::hypot(v2x, v2y) > 1e-6) {
+            if (capture_root_cost) {
 
-                    const double yaw1 = std::atan2(v1y, v1x);
-                    const double yaw2 = std::atan2(v2y, v2x);
-                    const double dtheta =
-                        std::abs(normalizeAngle(yaw2 - yaw1));
-                    new_g += params_.path_tangent_change_weight * dtheta;
-                }
+                HybridNode scored_node;
+                scored_node.g = new_g;
+                updateHeuristicTerms(scored_node, next_pose, goal_pose);
+
+                debug_cost.feasible = true;
+                debug_cost.obstacle_cost =
+                    std::max(0.0, transition_cost - primitive.travel_cost);
+                debug_cost.switch_cost = switch_cost;
+                debug_cost.goal_directed_cost = goal_directed_cost;
+                debug_cost.tangent_change_cost = tangent_change_cost;
+                debug_cost.delta_g = delta_g;
+                debug_cost.h_grid = scored_node.h_grid;
+                debug_cost.h_yaw = scored_node.h_yaw;
+                debug_cost.h_goal_dist = scored_node.h_goal_dist;
+                debug_cost.score = scored_node.f;
+                debug_cost_index = root_primitive_costs.size();
+                root_primitive_costs.push_back(debug_cost);
             }
 
             // push node
@@ -520,6 +640,8 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             if (it == node_lookup.end()) { // 未拓展过的
 
                 if (nodes.size() >= max_node_count) {
+                    if (capture_root_cost)
+                        publishPrimitiveCostVisualization(root_primitive_costs, -1);
                     RCLCPP_WARN(
                         node_->get_logger(),
                         "Hybrid A* aborted after reaching max node count=%zu, expanded=%d, open=%zu",
@@ -539,11 +661,13 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 next_node.g = new_g;
                 next_node.parent_index = cur_idx;
                 next_node.parent_primitive_id = primitive.id;
-                updateHeuristicTerms(next_node, next_pose);
+                updateHeuristicTerms(next_node, next_pose, goal_pose);
 
                 const int new_index = static_cast<int>(nodes.size());
                 nodes.push_back(next_node);
                 node_lookup[next_key] = new_index;
+                if (debug_cost_index < root_primitive_costs.size())
+                    root_primitive_costs[debug_cost_index].accepted = true;
                 open_list.push({
                     next_node.f,
                     next_node.h_grid + next_node.h_yaw + next_node.h_goal_dist,
@@ -558,7 +682,9 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                     old_node.g = new_g;
                     old_node.parent_index = cur_idx;
                     old_node.parent_primitive_id = primitive.id;
-                    updateHeuristicTerms(old_node, next_pose);
+                    updateHeuristicTerms(old_node, next_pose, goal_pose);
+                    if (debug_cost_index < root_primitive_costs.size())
+                        root_primitive_costs[debug_cost_index].accepted = true;
 
                     open_list.push({
                         old_node.f,
@@ -568,6 +694,9 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 }
             }
         }
+
+        if (cur_idx == 0 && !root_primitive_costs.empty())
+            publishPrimitiveCostVisualization(root_primitive_costs, -1);
     }
 
     RCLCPP_WARN(
@@ -793,6 +922,502 @@ nav_msgs::msg::Path MyHybridAStarPlanner::reconstructPath(
     return path;
 }
 
+int MyHybridAStarPlanner::findFirstPrimitiveId(
+    const std::vector<HybridNode> &nodes,
+    int goal_index
+) const {
+
+    if (goal_index < 0 || goal_index >= static_cast<int>(nodes.size()))
+        return -1;
+
+    int node_index = goal_index;
+    for (std::size_t depth = 0; depth < nodes.size(); ++depth) {
+
+        const int parent_index = nodes[node_index].parent_index;
+        if (parent_index == 0)
+            return nodes[node_index].parent_primitive_id;
+        if (parent_index < 0 || parent_index >= static_cast<int>(nodes.size()))
+            return -1;
+        node_index = parent_index;
+    }
+
+    return -1;
+}
+
+std::vector<PrimitiveCostDebug> MyHybridAStarPlanner::evaluatePrimitiveCostsAtPose(
+    const PlannerPose &current_pose,
+    const PlannerPose &goal_pose
+) const {
+
+    std::vector<PrimitiveCostDebug> costs;
+    costs.reserve(motion_primitives_.size());
+
+    HybridNode current_node;
+    current_node.pose = current_pose;
+    current_node.key = discretizeState(current_pose);
+    current_node.key.direction_id = static_cast<int>(MotionDirection::TRANSLATE);
+    current_node.g = 0.0;
+
+    std::unordered_map<StateKey, std::size_t, StateKeyHasher> best_by_state;
+    best_by_state.reserve(motion_primitives_.size());
+
+    for (const MotionPrimitive &primitive : motion_primitives_) {
+
+        PrimitiveCostDebug debug_cost;
+        debug_cost.primitive_id = primitive.id;
+        debug_cost.travel_cost = primitive.travel_cost;
+
+        PlannerPose next_pose;
+        std::vector<PlannerPose> sampled_poses;
+        double transition_cost = 0.0;
+        if (!simulatePrimitive(
+                current_node,
+                primitive,
+                next_pose,
+                sampled_poses,
+                transition_cost)) {
+
+            costs.push_back(debug_cost);
+            continue;
+        }
+
+        debug_cost.feasible = true;
+        debug_cost.obstacle_cost =
+            std::max(0.0, transition_cost - primitive.travel_cost);
+        debug_cost.switch_cost = computePrimitiveSwitchCost(current_node, primitive);
+        debug_cost.goal_directed_cost =
+            computeGoalDirectedCost(current_pose, next_pose, goal_pose);
+        debug_cost.delta_g =
+            transition_cost + debug_cost.switch_cost + debug_cost.goal_directed_cost;
+
+        HybridNode scored_node;
+        scored_node.g = debug_cost.delta_g;
+        updateHeuristicTerms(scored_node, next_pose, goal_pose);
+        debug_cost.h_grid = scored_node.h_grid;
+        debug_cost.h_yaw = scored_node.h_yaw;
+        debug_cost.h_goal_dist = scored_node.h_goal_dist;
+        debug_cost.score = scored_node.f;
+
+        StateKey next_key = discretizeState(next_pose);
+        next_key.direction_id = static_cast<int>(primitive.direction);
+        const std::size_t current_cost_index = costs.size();
+        if (!(next_key == current_node.key)) {
+
+            auto best_it = best_by_state.find(next_key);
+            if (best_it == best_by_state.end()) {
+
+                debug_cost.accepted = true;
+                best_by_state.emplace(next_key, current_cost_index);
+            } else if (debug_cost.delta_g < costs[best_it->second].delta_g) {
+
+                costs[best_it->second].accepted = false;
+                debug_cost.accepted = true;
+                best_it->second = current_cost_index;
+            }
+        }
+
+        costs.push_back(debug_cost);
+    }
+
+    return costs;
+}
+
+void MyHybridAStarPlanner::updatePrimitiveCostVisualization() {
+
+    std::unique_lock<std::mutex> lock(planning_mutex_, std::try_to_lock);
+    if (!lock.owns_lock() || !node_ || !tf_ || !costmap_ ||
+        !heuristic_ready_ || !has_primitive_cost_goal_) {
+
+        return;
+    }
+
+    try {
+
+        const geometry_msgs::msg::TransformStamped transform =
+            tf_->lookupTransform(
+                global_frame_,
+                params_.primitive_cost_frame,
+                tf2::TimePointZero);
+        PlannerPose current_pose;
+        current_pose.x = transform.transform.translation.x;
+        current_pose.y = transform.transform.translation.y;
+        current_pose.yaw = tf2::getYaw(transform.transform.rotation);
+
+        publishPrimitiveCostVisualization(
+            evaluatePrimitiveCostsAtPose(current_pose, primitive_cost_goal_),
+            -1,
+            true);
+    } catch (const tf2::TransformException &ex) {
+
+        RCLCPP_DEBUG_THROTTLE(
+            node_->get_logger(),
+            *node_->get_clock(),
+            2000,
+            "Cannot update primitive cost visualization: %s",
+            ex.what());
+    }
+}
+
+void MyHybridAStarPlanner::publishPrimitiveCostVisualization(
+    const std::vector<PrimitiveCostDebug> &costs,
+    int selected_primitive_id,
+    bool realtime
+) const {
+
+    if (!params_.visualize_primitive_costs || !primitive_cost_pub_ || !node_ || costs.empty())
+        return;
+
+    visualization_msgs::msg::MarkerArray marker_array;
+    const builtin_interfaces::msg::Time stamp;
+
+    visualization_msgs::msg::Marker delete_marker;
+    delete_marker.header.frame_id = params_.primitive_cost_frame;
+    delete_marker.header.stamp = stamp;
+    delete_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    marker_array.markers.push_back(delete_marker);
+
+    double min_score = std::numeric_limits<double>::infinity();
+    double max_score = -std::numeric_limits<double>::infinity();
+    int local_best_primitive_id = -1;
+    double local_best_score = std::numeric_limits<double>::infinity();
+    for (const PrimitiveCostDebug &cost : costs) {
+
+        if (!cost.feasible || !std::isfinite(cost.score))
+            continue;
+
+        min_score = std::min(min_score, cost.score);
+        max_score = std::max(max_score, cost.score);
+        if (cost.accepted && cost.score < local_best_score) {
+
+            local_best_primitive_id = cost.primitive_id;
+            local_best_score = cost.score;
+        }
+    }
+
+    auto findCost = [&](int primitive_id) -> const PrimitiveCostDebug * {
+
+        for (const PrimitiveCostDebug &cost : costs) {
+
+            if (cost.primitive_id == primitive_id)
+                return &cost;
+        }
+        return nullptr;
+    };
+
+    if (local_best_primitive_id >= 0) {
+
+        const PrimitiveCostDebug *best_cost = findCost(local_best_primitive_id);
+        if (best_cost == nullptr)
+            local_best_primitive_id = -1;
+    }
+
+    const double score_range =
+        std::isfinite(min_score) && std::isfinite(max_score) ? max_score - min_score : 0.0;
+    auto costColor = [&](const PrimitiveCostDebug &cost, double alpha) {
+
+        if (!cost.feasible) {
+
+            std_msgs::msg::ColorRGBA color;
+            color.r = 0.12F;
+            color.g = 0.12F;
+            color.b = 0.12F;
+            color.a = static_cast<float>(alpha);
+            return color;
+        }
+        if (!std::isfinite(cost.score)) {
+
+            std_msgs::msg::ColorRGBA color;
+            color.r = 0.45F;
+            color.g = 0.0F;
+            color.b = 0.55F;
+            color.a = static_cast<float>(alpha);
+            return color;
+        }
+
+        const double normalized =
+            score_range > 1e-9 ? (cost.score - min_score) / score_range : 0.0;
+        std_msgs::msg::ColorRGBA color = makeCostColor(normalized, alpha);
+        if (!cost.accepted)
+            color.a *= 0.35F;
+        return color;
+    };
+
+    struct CostSector {
+
+        double angle = 0.0;
+        double radius = 0.0;
+        const PrimitiveCostDebug *cost = nullptr;
+    };
+
+    std::vector<CostSector> sectors;
+    for (const PrimitiveCostDebug &cost : costs) {
+
+        const MotionPrimitive *primitive = findMotionPrimitiveById(cost.primitive_id);
+        if (primitive == nullptr || primitive->samples.empty() ||
+            std::hypot(primitive->v_x, primitive->v_y) <= 1e-6 ||
+            std::abs(primitive->omega) > 1e-6) {
+
+            continue;
+        }
+
+        const PlannerPose &end_pose = primitive->samples.back().pose;
+        sectors.push_back({
+            std::atan2(end_pose.y, end_pose.x),
+            std::hypot(end_pose.x, end_pose.y),
+            &cost});
+    }
+    std::sort(
+        sectors.begin(),
+        sectors.end(),
+        [](const CostSector &lhs, const CostSector &rhs) {
+            return lhs.angle < rhs.angle;
+        });
+
+    const double marker_z = params_.primitive_cost_marker_z;
+    if (sectors.size() >= 2) {
+
+        visualization_msgs::msg::Marker heatmap;
+        heatmap.header.frame_id = params_.primitive_cost_frame;
+        heatmap.header.stamp = stamp;
+        heatmap.ns = "primitive_cost_heatmap";
+        heatmap.id = 0;
+        heatmap.type = visualization_msgs::msg::Marker::TRIANGLE_LIST;
+        heatmap.action = visualization_msgs::msg::Marker::ADD;
+        heatmap.pose.orientation.w = 1.0;
+        heatmap.scale.x = 1.0;
+        heatmap.scale.y = 1.0;
+        heatmap.scale.z = 1.0;
+        heatmap.color.a = 0.45F;
+        heatmap.frame_locked = true;
+
+        const double two_pi = 2.0 * std::acos(-1.0);
+        for (std::size_t i = 0; i < sectors.size(); ++i) {
+
+            const CostSector &previous =
+                sectors[(i + sectors.size() - 1) % sectors.size()];
+            const CostSector &current = sectors[i];
+            const CostSector &next = sectors[(i + 1) % sectors.size()];
+            double previous_gap = std::fmod(current.angle - previous.angle + two_pi, two_pi);
+            double next_gap = std::fmod(next.angle - current.angle + two_pi, two_pi);
+            if (previous_gap <= 1e-9)
+                previous_gap = two_pi;
+            if (next_gap <= 1e-9)
+                next_gap = two_pi;
+
+            const double left_angle = current.angle - 0.5 * previous_gap;
+            const double right_angle = current.angle + 0.5 * next_gap;
+            const double left_radius = 0.5 * (current.radius + previous.radius);
+            const double right_radius = 0.5 * (current.radius + next.radius);
+
+            geometry_msgs::msg::Point origin;
+            origin.z = marker_z;
+            geometry_msgs::msg::Point left;
+            left.x = left_radius * std::cos(left_angle);
+            left.y = left_radius * std::sin(left_angle);
+            left.z = marker_z;
+            geometry_msgs::msg::Point right;
+            right.x = right_radius * std::cos(right_angle);
+            right.y = right_radius * std::sin(right_angle);
+            right.z = marker_z;
+
+            heatmap.points.push_back(origin);
+            heatmap.points.push_back(left);
+            heatmap.points.push_back(right);
+            const std_msgs::msg::ColorRGBA color = costColor(*current.cost, 0.45);
+            heatmap.colors.push_back(color);
+            heatmap.colors.push_back(color);
+            heatmap.colors.push_back(color);
+        }
+        marker_array.markers.push_back(heatmap);
+    }
+
+    const double costmap_resolution = costmap_ ? costmap_->getResolution() : 0.05;
+    const double line_width = std::max(0.012, 0.3 * costmap_resolution);
+    const double endpoint_scale = std::max(0.035, 0.75 * costmap_resolution);
+    const double rotation_radius = std::max(
+        0.08,
+        0.35 * params_.primitive_duration *
+            std::max(params_.max_vel_x, params_.max_vel_y));
+    double max_reach = 0.0;
+
+    for (const PrimitiveCostDebug &cost : costs) {
+
+        const MotionPrimitive *primitive = findMotionPrimitiveById(cost.primitive_id);
+        if (primitive == nullptr || primitive->samples.empty())
+            continue;
+
+        visualization_msgs::msg::Marker path_marker;
+        path_marker.header.frame_id = params_.primitive_cost_frame;
+        path_marker.header.stamp = stamp;
+        path_marker.ns = "primitive_cost_paths";
+        path_marker.id = primitive->id;
+        path_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+        path_marker.action = visualization_msgs::msg::Marker::ADD;
+        path_marker.pose.orientation.w = 1.0;
+        path_marker.scale.x =
+            primitive->id == selected_primitive_id ? 2.5 * line_width : line_width;
+        path_marker.color = costColor(cost, 0.95);
+        path_marker.frame_locked = true;
+
+        const bool pure_rotation =
+            std::hypot(primitive->v_x, primitive->v_y) <= 1e-6 &&
+            std::abs(primitive->omega) > 1e-6;
+        if (pure_rotation) {
+
+            geometry_msgs::msg::Point point;
+            point.x = rotation_radius;
+            point.z = marker_z + 0.01;
+            path_marker.points.push_back(point);
+            for (const MotionSample &sample : primitive->samples) {
+
+                point.x = rotation_radius * std::cos(primitive->omega * sample.time_from_start);
+                point.y = rotation_radius * std::sin(primitive->omega * sample.time_from_start);
+                path_marker.points.push_back(point);
+            }
+        } else {
+
+            geometry_msgs::msg::Point point;
+            point.z = marker_z + 0.01;
+            path_marker.points.push_back(point);
+            for (const MotionSample &sample : primitive->samples) {
+
+                point.x = sample.pose.x;
+                point.y = sample.pose.y;
+                path_marker.points.push_back(point);
+            }
+        }
+
+        const geometry_msgs::msg::Point endpoint = path_marker.points.back();
+        max_reach = std::max(max_reach, std::hypot(endpoint.x, endpoint.y));
+        marker_array.markers.push_back(path_marker);
+
+        if (primitive->id == selected_primitive_id) {
+
+            visualization_msgs::msg::Marker selected_marker = path_marker;
+            selected_marker.ns = "selected_primitive";
+            selected_marker.id = 0;
+            selected_marker.scale.x = line_width;
+            selected_marker.color.r = 1.0F;
+            selected_marker.color.g = 1.0F;
+            selected_marker.color.b = 1.0F;
+            selected_marker.color.a = 1.0F;
+            marker_array.markers.push_back(selected_marker);
+        }
+
+        visualization_msgs::msg::Marker endpoint_marker;
+        endpoint_marker.header = path_marker.header;
+        endpoint_marker.ns = "primitive_cost_endpoints";
+        endpoint_marker.id = primitive->id;
+        endpoint_marker.type = visualization_msgs::msg::Marker::SPHERE;
+        endpoint_marker.action = visualization_msgs::msg::Marker::ADD;
+        endpoint_marker.pose.position = endpoint;
+        endpoint_marker.pose.orientation.w = 1.0;
+        endpoint_marker.scale.x = endpoint_scale;
+        endpoint_marker.scale.y = endpoint_scale;
+        endpoint_marker.scale.z = endpoint_scale;
+        endpoint_marker.color = costColor(cost, 1.0);
+        endpoint_marker.frame_locked = true;
+        marker_array.markers.push_back(endpoint_marker);
+
+        if (params_.primitive_cost_show_text) {
+
+            visualization_msgs::msg::Marker text_marker;
+            text_marker.header = path_marker.header;
+            text_marker.ns = "primitive_cost_labels";
+            text_marker.id = primitive->id;
+            text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+            text_marker.action = visualization_msgs::msg::Marker::ADD;
+            text_marker.pose.position = endpoint;
+            const double endpoint_length = std::hypot(endpoint.x, endpoint.y);
+            if (endpoint_length > 1e-6) {
+
+                text_marker.pose.position.x *= 1.18;
+                text_marker.pose.position.y *= 1.18;
+            }
+            text_marker.pose.position.z = marker_z + std::max(0.055, costmap_resolution);
+            text_marker.pose.orientation.w = 1.0;
+            text_marker.scale.z = std::max(0.025, 0.5 * costmap_resolution);
+            text_marker.color.r = 1.0F;
+            text_marker.color.g = 1.0F;
+            text_marker.color.b = 1.0F;
+            text_marker.color.a = 1.0F;
+            text_marker.frame_locked = true;
+
+            std::ostringstream label;
+            if (primitive->id == selected_primitive_id)
+                label << "PATH ";
+            else if (primitive->id == local_best_primitive_id)
+                label << "MIN ";
+            label << "#" << primitive->id << " ";
+            if (!cost.feasible)
+                label << "blocked";
+            else if (!std::isfinite(cost.score))
+                label << "f=inf";
+            else
+                label << "f=" << std::fixed << std::setprecision(2) << cost.score;
+            if (cost.feasible && !cost.accepted)
+                label << " dup";
+            text_marker.text = label.str();
+            marker_array.markers.push_back(text_marker);
+        }
+
+        RCLCPP_DEBUG(
+            node_->get_logger(),
+            "Primitive #%d feasible=%s accepted=%s u=(%.3f, %.3f, %.3f) "
+            "travel=%.3f obstacle=%.3f switch=%.3f goal=%.3f tangent=%.3f "
+            "delta_g=%.3f h=(%.3f, %.3f, %.3f) f=%.3f",
+            primitive->id,
+            cost.feasible ? "true" : "false",
+            cost.accepted ? "true" : "false",
+            primitive->v_x,
+            primitive->v_y,
+            primitive->omega,
+            cost.travel_cost,
+            cost.obstacle_cost,
+            cost.switch_cost,
+            cost.goal_directed_cost,
+            cost.tangent_change_cost,
+            cost.delta_g,
+            cost.h_grid,
+            cost.h_yaw,
+            cost.h_goal_dist,
+            cost.score);
+    }
+
+    visualization_msgs::msg::Marker summary_marker;
+    summary_marker.header.frame_id = params_.primitive_cost_frame;
+    summary_marker.header.stamp = stamp;
+    summary_marker.ns = "primitive_cost_summary";
+    summary_marker.id = 0;
+    summary_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    summary_marker.action = visualization_msgs::msg::Marker::ADD;
+    summary_marker.pose.position.y = -max_reach - 0.08;
+    summary_marker.pose.position.z = marker_z + 0.12;
+    summary_marker.pose.orientation.w = 1.0;
+    summary_marker.scale.z = std::max(0.035, 0.6 * costmap_resolution);
+    summary_marker.color.r = 1.0F;
+    summary_marker.color.g = 1.0F;
+    summary_marker.color.b = 1.0F;
+    summary_marker.color.a = 1.0F;
+    summary_marker.frame_locked = true;
+
+    std::ostringstream summary;
+    if (realtime)
+        summary << "LIVE ";
+    summary << "f = delta_g + h | blue: low, red: high, gray: blocked";
+    if (std::isfinite(min_score) && std::isfinite(max_score)) {
+
+        summary << "\nrange=[" << std::fixed << std::setprecision(2)
+                << min_score << ", " << max_score << "]";
+    }
+    if (selected_primitive_id >= 0)
+        summary << " PATH=#" << selected_primitive_id;
+    summary_marker.text = summary.str();
+    marker_array.markers.push_back(summary_marker);
+
+    primitive_cost_pub_->publish(marker_array);
+}
+
 
 void MyHybridAStarPlanner::buildMotionPrimitives() {
 
@@ -1013,18 +1638,29 @@ double MyHybridAStarPlanner::computeNodeHeuristic(
     const PlannerPose &goal
 ) const {
 
+    HybridNode node;
+    node.g = 0.0;
+    updateHeuristicTerms(node, pose, goal);
+    return node.h_grid + node.h_yaw + node.h_goal_dist;
+}
+
+void MyHybridAStarPlanner::updateHeuristicTerms(
+    HybridNode &node,
+    const PlannerPose &pose,
+    const PlannerPose &goal
+) const {
+
     unsigned int mx = 0;
     unsigned int my = 0;
-    double h_grid = std::numeric_limits<double>::infinity();
+    node.h_grid = std::numeric_limits<double>::infinity();
     if (costmap_ && costmap_->worldToMap(pose.x, pose.y, mx, my))
-        h_grid = params_.heuristic_grid_weight * getGridHeuristic(mx, my);
+        node.h_grid = params_.heuristic_grid_weight * getGridHeuristic(mx, my);
 
-    const double h_yaw = params_.heuristic_yaw_weight *
+    node.h_yaw = params_.heuristic_yaw_weight *
         std::abs(normalizeAngle(goal.yaw - pose.yaw));
-    const double h_goal_dist = params_.heuristic_goal_dist_weight *
+    node.h_goal_dist = params_.heuristic_goal_dist_weight *
         std::hypot(goal.x - pose.x, goal.y - pose.y);
-
-    return h_grid + h_yaw + h_goal_dist;
+    node.f = node.g + node.h_grid + node.h_yaw + node.h_goal_dist;
 }
 
 const MotionPrimitive * MyHybridAStarPlanner::findMotionPrimitiveById(int primitive_id) const {
@@ -1104,6 +1740,28 @@ double MyHybridAStarPlanner::computeGoalDirectedCost(
     }
 
     return cost;
+}
+
+double MyHybridAStarPlanner::computePathTangentChangeCost(
+    const PlannerPose &previous,
+    const PlannerPose &current,
+    const PlannerPose &next
+) const {
+
+    const double previous_dx = current.x - previous.x;
+    const double previous_dy = current.y - previous.y;
+    const double next_dx = next.x - current.x;
+    const double next_dy = next.y - current.y;
+    if (std::hypot(previous_dx, previous_dy) <= 1e-6 ||
+        std::hypot(next_dx, next_dy) <= 1e-6) {
+
+        return 0.0;
+    }
+
+    const double previous_yaw = std::atan2(previous_dy, previous_dx);
+    const double next_yaw = std::atan2(next_dy, next_dx);
+    return params_.path_tangent_change_weight *
+        std::abs(normalizeAngle(next_yaw - previous_yaw));
 }
 
 bool MyHybridAStarPlanner::simulatePrimitive(
