@@ -416,12 +416,23 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     const rclcpp::Time now = node_->now();
 
     uint8_t replan_reason = rm_interfaces::msg::ReplanEvent::FORCED;
+    rclcpp::Time replan_trigger_time = now;
+    double path_block_detection_ms = 0.0;
 
     if (params_.reuse_path_if_valid && has_last_path_ && !last_path_.poses.empty()) {
 
         const double cached_goal_error = pointDistance2D(last_path_.poses.back(), goal);
         const bool same_goal = cached_goal_error <= params_.goal_tolerance_xy;
-        const bool blocked = params_.immediate_replan_if_blocked && isCachedPathBlocked(last_path_);
+        bool blocked = false;
+        if (params_.immediate_replan_if_blocked) {
+
+            replan_trigger_time = node_->now();
+            const auto block_detection_start = std::chrono::steady_clock::now();
+            blocked = isCachedPathBlocked(last_path_);
+            path_block_detection_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - block_detection_start).count();
+        }
         const bool timeout = (now - last_plan_time_).seconds() >= params_.replan_time_threshold;
         if (!same_goal)
             replan_reason = rm_interfaces::msg::ReplanEvent::GOAL_CHANGED;
@@ -593,7 +604,16 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             last_path_ = planned_path;
             has_last_path_ = true;
             last_plan_time_ = now;
-            publishReplanEvent(replan_reason, goal, planned_path.header.stamp);
+            const double front_end_search_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - front_end_start_time).count();
+            publishReplanEvent(
+                replan_reason,
+                goal,
+                planned_path.header.stamp,
+                replan_trigger_time,
+                path_block_detection_ms,
+                front_end_search_ms);
             RCLCPP_INFO(
                 node_->get_logger(),
                 "Hybrid A* succeeded in %.3fs, expanded=%d, nodes=%zu, path_points=%zu",
@@ -601,9 +621,6 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                 expanded_iterations,
                 nodes.size(),
                 planned_path.poses.size());
-            const double front_end_search_ms =
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - front_end_start_time).count();
             logMetrics(true, false, front_end_search_ms, planned_path);
             return planned_path;
         }
@@ -877,14 +894,17 @@ double MyHybridAStarPlanner::pointDistance2D(
 void MyHybridAStarPlanner::publishReplanEvent(
     uint8_t reason,
     const geometry_msgs::msg::PoseStamped &goal,
-    const builtin_interfaces::msg::Time &candidate_path_stamp
+    const builtin_interfaces::msg::Time &candidate_path_stamp,
+    const rclcpp::Time &trigger_time,
+    double path_block_detection_ms,
+    double front_end_ms
 ) {
 
     if (!replan_event_pub_ || !node_)
         return;
 
     rm_interfaces::msg::ReplanEvent event;
-    event.header.stamp = node_->now();
+    event.header.stamp = trigger_time;
     event.header.frame_id = global_frame_;
     event.need_replan = true;
     event.event_id = ++replan_event_id_;
@@ -898,6 +918,14 @@ void MyHybridAStarPlanner::publishReplanEvent(
         "Published replan event id=%lu reason=%u",
         static_cast<unsigned long>(event.event_id),
         event.reason);
+    RCLCPP_INFO(
+        node_->get_logger(),
+        "REPLAN_METRICS stage=planner event_id=%lu reason=%u "
+        "path_block_detection_ms=%.3f front_end_ms=%.3f",
+        static_cast<unsigned long>(event.event_id),
+        event.reason,
+        path_block_detection_ms,
+        front_end_ms);
 }
 
 /**

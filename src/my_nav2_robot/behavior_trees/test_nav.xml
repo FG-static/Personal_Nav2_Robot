@@ -9,10 +9,12 @@
           <RecoveryNode name="ComputePathToPose"
                         number_of_retries="1">
             <Sequence>
+              <!-- planner_id: AStar | RRTStar | HybridAStar -->
               <ComputePathToPose goal="{goal}"
                                  path="{raw_path}"
-                                 planner_id="GridBased"/>
-              <SmoothPath smoother_id="simple_smoother"
+                                 planner_id="HybridAStar"/>
+              <!-- smoother_id: simple_smoother | esdf_g2o_smoother -->
+              <SmoothPath smoother_id="esdf_g2o_smoother"
                           unsmoothed_path="{raw_path}"
                           smoothed_path="{candidate_path}"/>
             </Sequence>
@@ -24,6 +26,7 @@
                           output_path="{path}"
                           goal="{goal}"
                           replan_event_topic="trajectory_generation/replan_event"/>
+        <!-- controller_id: FollowPath (mecanum TEB) | MPC | DWA -->
         <FollowPath path="{path}"
                     controller_id="FollowPath"/>
       </PipelineSequence>

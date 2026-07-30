@@ -1,4 +1,6 @@
 #include "my_rrtstar_planner/rrtstar_planner.hpp"
+
+#include "nav2_costmap_2d/cost_values.hpp"
 #include "my_planning_metrics/path_metrics.hpp"
 #include "nav2_core/planner_exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -34,7 +36,7 @@ namespace my_rrtstar_planner {
         node_->get_parameter(name_ + ".search_radius", search_radius_);
 
         nav2_util::declare_parameter_if_not_declared(
-            node_, name_ + ".goal_sample_rate", rclcpp::ParameterValue(0.5));
+            node_, name_ + ".goal_sample_rate", rclcpp::ParameterValue(0.1));
         node_->get_parameter(name_ + ".goal_sample_rate", goal_sample_rate_);
 
         nav2_util::declare_parameter_if_not_declared(
@@ -48,6 +50,10 @@ namespace my_rrtstar_planner {
         nav2_util::declare_parameter_if_not_declared(
             node_, name_ + ".max_iterations_after_goal", rclcpp::ParameterValue(1000));
         node_->get_parameter(name_ + ".max_iterations_after_goal", max_iterations_after_goal_);
+
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name_ + ".allow_unknown", rclcpp::ParameterValue(true));
+        node_->get_parameter(name_ + ".allow_unknown", allow_unknown_);
 
         // 初始化随机数生成器
         rng.seed(std::random_device{}());
@@ -65,6 +71,13 @@ namespace my_rrtstar_planner {
     void MyRRTStarPlanner::activate() { RCLCPP_INFO(node_->get_logger(), "插件已激活"); }
     void MyRRTStarPlanner::deactivate() { RCLCPP_INFO(node_->get_logger(), "插件已停用"); }
     void MyRRTStarPlanner::cleanup() { RCLCPP_INFO(node_->get_logger(), "插件已清理"); }
+
+    bool MyRRTStarPlanner::isCellTraversable(unsigned int mx, unsigned int my) const {
+
+        const unsigned char cost = costmap_->getCost(mx, my);
+        return cost < nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE ||
+            (allow_unknown_ && cost == nav2_costmap_2d::NO_INFORMATION);
+    }
 
     bool MyRRTStarPlanner::isCollisionFreePath(int idx1, int idx2) {
 
@@ -91,7 +104,7 @@ namespace my_rrtstar_planner {
             unsigned int mx, my;
             if (!costmap_->worldToMap(wx, wy, mx, my)) return false; // 超出地图范围
             
-            if (costmap_->getCost(mx, my) >= 250) return false;
+            if (!isCellTraversable(mx, my)) return false;
         }
         return true;
     }
@@ -99,9 +112,17 @@ namespace my_rrtstar_planner {
     nav_msgs::msg::Path MyRRTStarPlanner::createPlan(
         const geometry_msgs::msg::PoseStamped &start,
         const geometry_msgs::msg::PoseStamped &goal,
-        std::function<bool()> /*cancel_checker*/) {
+        std::function<bool()> cancel_checker) {
 
         const auto total_start_time = std::chrono::steady_clock::now();
+        std::size_t goal_samples = 0;
+        std::size_t random_samples = 0;
+        std::size_t blocked_sample_rejections = 0;
+        std::size_t no_motion_rejections = 0;
+        std::size_t blocked_node_rejections = 0;
+        std::size_t duplicate_rejections = 0;
+        std::size_t collision_rejections = 0;
+        std::size_t successful_extensions = 0;
         auto logMetrics =
             [&](
                 bool success,
@@ -139,7 +160,11 @@ namespace my_rrtstar_planner {
                     "front_end_refinement_ms=%.3f front_end_ms=%.3f "
                     "planner_total_ms=%.3f metrics_eval_ms=%.3f path_points=%zu "
                     "path_length_m=%.3f max_curvature_1pm=%.3f "
-                    "min_lethal_obstacle_distance_m=%.3f",
+                    "min_lethal_obstacle_distance_m=%.3f goal_samples=%zu "
+                    "random_samples=%zu successful_extensions=%zu "
+                    "blocked_sample_rejections=%zu no_motion_rejections=%zu "
+                    "blocked_node_rejections=%zu duplicate_rejections=%zu "
+                    "collision_rejections=%zu",
                     success ? "true" : "false",
                     tree_nodes,
                     tree_nodes,
@@ -154,7 +179,15 @@ namespace my_rrtstar_planner {
                     path_metrics.point_count,
                     path_metrics.length_m,
                     path_metrics.max_curvature_inv_m,
-                    path_metrics.min_lethal_obstacle_distance_m);
+                    path_metrics.min_lethal_obstacle_distance_m,
+                    goal_samples,
+                    random_samples,
+                    successful_extensions,
+                    blocked_sample_rejections,
+                    no_motion_rejections,
+                    blocked_node_rejections,
+                    duplicate_rejections,
+                    collision_rejections);
             };
 
         nav_msgs::msg::Path global_path;
@@ -167,6 +200,22 @@ namespace my_rrtstar_planner {
             !costmap_->worldToMap(goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal)) {
 
             RCLCPP_ERROR(node_->get_logger(), "Start or Goal is outside of costmap bounds");
+            logMetrics(false, 0, -1, 0, 0, -1.0, 0.0, 0.0, global_path);
+            return global_path;
+        }
+
+        const unsigned char start_cost = costmap_->getCost(mx_start, my_start);
+        const unsigned char goal_cost = costmap_->getCost(mx_goal, my_goal);
+        if (!isCellTraversable(mx_start, my_start) ||
+            !isCellTraversable(mx_goal, my_goal)) {
+
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "RRT* rejected blocked start/goal cell: start_cost=%u goal_cost=%u "
+                "allow_unknown=%s",
+                static_cast<unsigned int>(start_cost),
+                static_cast<unsigned int>(goal_cost),
+                allow_unknown_ ? "true" : "false");
             logMetrics(false, 0, -1, 0, 0, -1.0, 0.0, 0.0, global_path);
             return global_path;
         }
@@ -184,8 +233,19 @@ namespace my_rrtstar_planner {
         int start_idx = my_start * width + mx_start,
             goal_idx = my_goal * width + mx_goal;
 
+        if (start_idx == goal_idx) {
+
+            global_path.poses.push_back(start);
+            global_path.poses.push_back(goal);
+            logMetrics(true, 0, 0, 1, 0, 0.0, 0.0, 0.0, global_path);
+            return global_path;
+        }
+
         tree.clear();
         tree.emplace_back(start_idx, -1, 0.0); // 将起点加入树中，父节点索引为-1，代价为0
+        std::vector<int> node_index_by_cell(
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height), -1);
+        node_index_by_cell[static_cast<std::size_t>(start_idx)] = 0;
         double best_cost = std::numeric_limits<double>::infinity(); // 记录找到的路径的最优代价
         int goal_node_idx = -1; // 记录找到的目标节点在树中的索引
 
@@ -203,153 +263,212 @@ namespace my_rrtstar_planner {
         for (int iter = 0; iter < max_iterations_; ++ iter) {
             iterations_executed = iter + 1;
 
-            // 如果找到更优路径，更新 best_cost 和 found_path
+            if (cancel_checker && cancel_checker()) {
+
+                const auto cancel_time = std::chrono::steady_clock::now();
+                const double front_end_ms =
+                    std::chrono::duration<double, std::milli>(
+                        cancel_time - search_start_time).count();
+                RCLCPP_WARN(
+                    node_->get_logger(),
+                    "RRT* planning cancelled after %d iterations and %zu successful extensions",
+                    iterations_executed,
+                    successful_extensions);
+                logMetrics(
+                    false,
+                    iterations_executed,
+                    first_solution_iteration,
+                    tree.size(),
+                    rewire_count,
+                    -1.0,
+                    0.0,
+                    front_end_ms,
+                    global_path);
+                return global_path;
+            }
+
             double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
             int sample_idx; // 采样点在地图中的索引
-            if (r < goal_sample_rate_) sample_idx = goal_idx; // 以一定概率直接采样目标点
-            else {
+            if (r < goal_sample_rate_) {
+
+                sample_idx = goal_idx;
+                ++goal_samples;
+            } else {
 
                 double rx = uni_x(rng), ry = uni_y(rng);
                 unsigned int mx, my;
                 if (!costmap_->worldToMap(rx, ry, mx, my)) continue; // 采样点在地图外，丢弃
+                ++random_samples;
                 // 如果采样点落在障碍上也丢弃
-                if (costmap_->getCost(mx, my) >= 250) continue;
+                if (!isCellTraversable(mx, my)) {
+
+                    ++blocked_sample_rejections;
+                    continue;
+                }
                 sample_idx = my * width + mx;
             }
 
-            // 在搜索半径内找到代价最小的节点作为父节点
-            int best_parent_idx = 0; // 默认为树的第一个节点（起点）
-            double best_parent_cost = std::numeric_limits<double>::infinity();
-            
+            const int sample_mx = sample_idx % width;
+            const int sample_my = sample_idx / width;
+
+            // RRT* 先寻找距离采样点最近的树节点，再向采样点扩展固定步长。
+            int nearest_idx = -1;
+            double nearest_distance_sq = std::numeric_limits<double>::infinity();
             for (size_t i = 0; i < tree.size(); ++ i) {
 
-                unsigned int mx, my; // 其他节点在地图中的坐标
-                my = tree[i].pos_idx / width;
-                mx = tree[i].pos_idx % width;
-                double 
-                    ddx = mx - (sample_idx % width), ddy = my - (sample_idx / width),
-                    dist_to_sample = sqrt(ddx * ddx + ddy * ddy);
-                
-                if (dist_to_sample < search_radius_cells) {
+                const int node_mx = tree[i].pos_idx % width;
+                const int node_my = tree[i].pos_idx / width;
+                const double dx = static_cast<double>(sample_mx - node_mx);
+                const double dy = static_cast<double>(sample_my - node_my);
+                const double distance_sq = dx * dx + dy * dy;
+                if (distance_sq < nearest_distance_sq) {
 
-                    // TODO：KD-Tree优化或网格哈希算法优化
-                    double cost_via_this_node = tree[i].cost + dist_to_sample;
-                    
-                    // 检查这条路径是否碰撞
-                    if (!isCollisionFreePath(tree[i].pos_idx, sample_idx)) continue;
-                    
-                    if (cost_via_this_node < best_parent_cost) {
-
-                        best_parent_cost = cost_via_this_node;
-                        best_parent_idx = i;
-                    }
+                    nearest_distance_sq = distance_sq;
+                    nearest_idx = static_cast<int>(i);
                 }
             }
-            
-            unsigned int sample_mx = sample_idx % width;
-            unsigned int sample_my = sample_idx / width;
 
-            // 从选择的最优父节点向采样点扩展，在地图坐标中计算方向向量（格子单位）
-            unsigned int parent_mx, parent_my;
-            parent_my = tree[best_parent_idx].pos_idx / width;
-            parent_mx = tree[best_parent_idx].pos_idx % width;
+            if (nearest_idx < 0)
+                continue;
 
-            double 
-                dx = sample_mx - parent_mx, dy = sample_my - parent_my,
-                dist = sqrt(dx * dx + dy * dy);
+            const int nearest_mx = tree[nearest_idx].pos_idx % width;
+            const int nearest_my = tree[nearest_idx].pos_idx / width;
+            double dx = static_cast<double>(sample_mx - nearest_mx);
+            double dy = static_cast<double>(sample_my - nearest_my);
+            const double dist = std::hypot(dx, dy);
             if (dist > step_size_cells && dist > 0.0) {
+
                 dx *= step_size_cells / dist;
                 dy *= step_size_cells / dist;
             }
 
-            // 计算新的地图坐标，确保在整数范围内
-            unsigned int 
-                new_mx = parent_mx + static_cast<int>(round(dx)),
-                new_my = parent_my + static_cast<int>(round(dy));
-            
-            // 检查是否在地图范围内
-            if (new_mx >= static_cast<unsigned int>(width) ||
-                new_my >= static_cast<unsigned int>(height))
+            const int new_mx_signed = nearest_mx + static_cast<int>(std::lround(dx));
+            const int new_my_signed = nearest_my + static_cast<int>(std::lround(dy));
+            if (new_mx_signed < 0 || new_my_signed < 0 ||
+                new_mx_signed >= width || new_my_signed >= height) {
+
                 continue;
-                
-            int new_idx = new_my * width + new_mx;
+            }
 
-            // 如果没有移动则跳过
-            if (new_idx == tree[best_parent_idx].pos_idx) continue;
+            const unsigned int new_mx = static_cast<unsigned int>(new_mx_signed);
+            const unsigned int new_my = static_cast<unsigned int>(new_my_signed);
+            const int new_idx = new_my_signed * width + new_mx_signed;
 
-            // 检查新节点是否与障碍物碰撞
-            if (costmap_->getCost(new_mx, new_my) >= 250)  continue; // 新节点是障碍物，丢弃
+            if (new_idx == tree[nearest_idx].pos_idx) {
 
-            // 检查从最优父节点到新节点的路径是否碰撞
-            if (!isCollisionFreePath(tree[best_parent_idx].pos_idx, new_idx)) continue;
+                ++no_motion_rejections;
+                continue;
+            }
+            if (node_index_by_cell[static_cast<std::size_t>(new_idx)] >= 0) {
 
-            // 将新节点加入树中
-            double cost_to_new_node = tree[best_parent_idx].cost + sqrt(dx * dx + dy * dy);
+                ++duplicate_rejections;
+                continue;
+            }
+            if (!isCellTraversable(new_mx, new_my)) {
+
+                ++blocked_node_rejections;
+                continue;
+            }
+            if (!isCollisionFreePath(tree[nearest_idx].pos_idx, new_idx)) {
+
+                ++collision_rejections;
+                continue;
+            }
+
+            // 在新节点邻域内选择总代价最低且无碰撞的父节点。
+            int best_parent_idx = nearest_idx;
+            const double nearest_edge_cost = std::hypot(
+                static_cast<double>(new_mx_signed - nearest_mx),
+                static_cast<double>(new_my_signed - nearest_my));
+            double cost_to_new_node = tree[nearest_idx].cost + nearest_edge_cost;
+            for (size_t i = 0; i < tree.size(); ++ i) {
+
+                const int candidate_mx = tree[i].pos_idx % width;
+                const int candidate_my = tree[i].pos_idx / width;
+                const double distance_to_new = std::hypot(
+                    static_cast<double>(new_mx_signed - candidate_mx),
+                    static_cast<double>(new_my_signed - candidate_my));
+                if (distance_to_new > search_radius_cells)
+                    continue;
+
+                const double candidate_cost = tree[i].cost + distance_to_new;
+                if (candidate_cost >= cost_to_new_node)
+                    continue;
+                if (!isCollisionFreePath(tree[i].pos_idx, new_idx)) {
+
+                    ++collision_rejections;
+                    continue;
+                }
+
+                best_parent_idx = static_cast<int>(i);
+                cost_to_new_node = candidate_cost;
+            }
+
             tree.emplace_back(new_idx, best_parent_idx, cost_to_new_node);
+            const int new_node_idx = static_cast<int>(tree.size() - 1);
+            node_index_by_cell[static_cast<std::size_t>(new_idx)] = new_node_idx;
+            ++successful_extensions;
 
             // 重连附近节点 Rewire
-            for (size_t i = 0; i < tree.size() - 1; ++ i) { // 不包括刚加入的新节点
+            for (int i = 1; i < new_node_idx; ++ i) {
 
-                unsigned int curr_mx, curr_my;
-                curr_my = tree[i].pos_idx / width;
-                curr_mx = tree[i].pos_idx % width;
+                const int curr_mx = tree[i].pos_idx % width;
+                const int curr_my = tree[i].pos_idx / width;
+                const double dist_to_new_node = std::hypot(
+                    static_cast<double>(curr_mx - new_mx_signed),
+                    static_cast<double>(curr_my - new_my_signed));
+                if (dist_to_new_node > search_radius_cells)
+                    continue;
 
-                double 
-                    ddx = curr_mx - new_mx, ddy = curr_my - new_my,
-                    dist_to_new_node = sqrt(ddx * ddx + ddy * ddy);
+                const double cost_via_new_node = cost_to_new_node + dist_to_new_node;
+                if (cost_via_new_node >= tree[i].cost)
+                    continue;
+                if (!isCollisionFreePath(tree[i].pos_idx, new_idx)) {
 
-                if (dist_to_new_node < search_radius_cells) {
-
-                    // TODO：KD-Tree优化或网格哈希算法优化
-                    double cost_via_new_node = cost_to_new_node + dist_to_new_node;
-
-                    if (cost_via_new_node < tree[i].cost) { // 通过新节点到达该节点更优，尝试重连
-
-                        bool is_collision_free_path =
-                            isCollisionFreePath(tree[i].pos_idx, new_idx);
-
-                        if (is_collision_free_path) {
-                            
-                            double old_cost = tree[i].cost;
-                            tree[i].parent = tree.size() - 1; // 更新父节点索引
-                            tree[i].cost = cost_via_new_node; // 更新代价
-                            
-                            // 递归更新该节点所有子节点的代价
-                            double cost_delta = cost_via_new_node - old_cost;
-                            updateChildrenCost(i, cost_delta);
-                            ++rewire_count;
-                        }
-                    }
+                    ++collision_rejections;
+                    continue;
                 }
+
+                const double old_cost = tree[i].cost;
+                tree[i].parent = new_node_idx;
+                tree[i].cost = cost_via_new_node;
+                updateChildrenCost(i, cost_via_new_node - old_cost);
+                ++rewire_count;
             }
 
             // 检查是否到达目标点附近
-            unsigned int goal_mx, goal_my;
-            goal_my = goal_idx / width;
-            goal_mx = goal_idx % width;
+            const double ddx_goal = static_cast<double>(
+                static_cast<int>(mx_goal) - new_mx_signed);
+            const double ddy_goal = static_cast<double>(
+                static_cast<int>(my_goal) - new_my_signed);
+            const double dist_to_goal_sqrd =
+                ddx_goal * ddx_goal + ddy_goal * ddy_goal;
 
-            double ddx_goal = goal_mx - new_mx, ddy_goal = goal_my - new_my;
-            double dist_to_goal_sqrd =
-            ddx_goal * ddx_goal + ddy_goal * ddy_goal;
-
-            if (dist_to_goal_sqrd < goal_tolerance_cells * goal_tolerance_cells) {
+            if (dist_to_goal_sqrd <= goal_tolerance_cells * goal_tolerance_cells) {
 
                 // 检查到目标的路径是否碰撞
-	                if (isCollisionFreePath(new_idx, goal_idx)) {
+                if (isCollisionFreePath(new_idx, goal_idx)) {
 
-	                    found_path = true;
-	                    if (stop_iter == 0) {
-                            first_solution_time = std::chrono::steady_clock::now();
-                            has_first_solution_time = true;
-                            first_solution_iteration = iter + 1;
-                            RCLCPP_INFO(node_->get_logger(), "RRT* found a path to the goal in %d iterations, now optimizing...", iter + 1);
-                        }
+                    found_path = true;
+                    if (stop_iter == 0) {
+
+                        first_solution_time = std::chrono::steady_clock::now();
+                        has_first_solution_time = true;
+                        first_solution_iteration = iter + 1;
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "RRT* found a path to the goal in %d iterations, now optimizing...",
+                            iter + 1);
+                    }
                     double cost_to_goal = cost_to_new_node + std::sqrt(dist_to_goal_sqrd);
                     if (cost_to_goal < best_cost) {
 
                         best_cost = cost_to_goal;
-                        goal_node_idx = tree.size() - 1; // 记录新节点在树中的索引
+                        goal_node_idx = new_node_idx;
                     }
+                } else {
+
+                    ++collision_rejections;
                 }
             }
             if (found_path) {
@@ -421,7 +540,19 @@ namespace my_rrtstar_planner {
         } else {
 
             global_path.poses.clear();
-            RCLCPP_WARN(node_->get_logger(), "RRT* failed to find a path from start to goal");
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "RRT* failed after %d iterations: tree=%zu extensions=%zu "
+                "blocked_samples=%zu blocked_nodes=%zu duplicates=%zu "
+                "no_motion=%zu collision_edges=%zu",
+                iterations_executed,
+                tree.size(),
+                successful_extensions,
+                blocked_sample_rejections,
+                blocked_node_rejections,
+                duplicate_rejections,
+                no_motion_rejections,
+                collision_rejections);
         }
         const bool success = found_path && goal_node_idx != -1 && !global_path.poses.empty();
         logMetrics(

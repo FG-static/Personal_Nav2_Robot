@@ -40,7 +40,9 @@ private:
     bool shouldConsumeReplanEvent(
         const nav_msgs::msg::Path &candidate_path,
         const geometry_msgs::msg::PoseStamped &goal,
-        uint64_t &event_id);
+        uint64_t &event_id,
+        builtin_interfaces::msg::Time &trigger_stamp,
+        uint8_t &reason);
     void onReplanEvent(const rm_interfaces::msg::ReplanEvent::SharedPtr msg);
     double getYaw(const geometry_msgs::msg::Quaternion &q) const;
     double normalizeAngle(double angle) const;
@@ -66,6 +68,7 @@ private:
     uint64_t last_seen_event_id_ = 0;
     uint64_t last_consumed_event_id_ = 0;
     builtin_interfaces::msg::Time last_replan_candidate_stamp_;
+    builtin_interfaces::msg::Time event_trigger_stamp_;
     geometry_msgs::msg::PoseStamped event_goal_;
     uint8_t event_reason_ = rm_interfaces::msg::ReplanEvent::UNKNOWN;
 

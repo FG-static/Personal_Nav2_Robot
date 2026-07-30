@@ -51,6 +51,7 @@ bt_navigator:
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
+    always_reload_bt_xml: true
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
     navigate_through_poses:
@@ -93,7 +94,7 @@ controller_server:
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
-    controller_plugins: ["FollowPath"]
+    controller_plugins: ["FollowPath", "MPC", "DWA"]
     odom_topic: /ground_truth
     use_realtime_priority: false
     enable_stamped_cmd_vel: false
@@ -142,6 +143,35 @@ controller_server:
       reinit_pose_distance: 0.15
       min_forward_prune_distance: 0.2
       control_lookahead_dist: 0.25
+      transform_tolerance: 0.1
+    MPC:
+      plugin: "my_mpc_controller/MyMPCController"
+      q_11: 30.0
+      q_22: 30.0
+      q_33: 30.0
+      r_11: 0.1
+      r_22: 0.1
+      r_33: 0.5
+      f_11: 60.0
+      f_22: 60.0
+      f_33: 60.0
+      v_max: 2.0
+      w_max: 1.0
+      a_v_max: 1.5
+      a_w_max: 1.0
+      n: 10
+      transform_tolerance: 0.1
+    DWA:
+      plugin: "my_nav2_controller/MyDWAController"
+      alpha: 2.0
+      beta: 1.5
+      gamma: 1.0
+      lookahead_dist: 0.8
+      max_v: 0.5
+      max_w: 1.5
+      lim_a: 2.5
+      lim_aw: 3.2
+      sim_time: 1.5
       transform_tolerance: 0.1
 
 local_costmap:
@@ -253,24 +283,27 @@ planner_server:
   ros__parameters:
     use_sim_time: True
     expected_planner_frequency: 1.0
-    planner_plugins: ["GridBased"]
+    planner_plugins: ["AStar", "RRTStar", "HybridAStar"]
     costmap_update_timeout: 1.0
-    GridBased:
-      # rrt* 220ms
-      #plugin: "my_rrtstar_planner/MyRRTStarPlanner"
+    AStar:
+      plugin: "my_nav2_planner/MyAStarPlanner"
+      unknown_cost: 5.0
+      interpolation_resolution: 0.1
+    RRTStar:
+      plugin: "my_rrtstar_planner/MyRRTStarPlanner"
       step_size: 0.25
       max_iterations: 80000
       search_radius: 2.0
-      goal_sample_rate: 0.5
+      goal_sample_rate: 0.1
       goal_tolerance: 0.5
       collision_check_resolution: 0.02
       max_iterations_after_goal: 1000
-      # A*  1ms
-      #plugin: "my_nav2_planner/MyAStarPlanner"
+      allow_unknown: true
+    HybridAStar:
+      plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       unknown_cost: 5.0
       interpolation_resolution: 0.1
-      # Hybrid A*
-      plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
+      max_iterations: 80000
       primitive_duration: 0.25
       step_time: 0.025
       yaw_bin_count: 36 # 朝向离散桶数

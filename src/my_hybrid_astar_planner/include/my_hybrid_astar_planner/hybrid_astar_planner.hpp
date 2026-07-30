@@ -261,7 +261,10 @@ private:
     void publishReplanEvent(
         uint8_t reason,
         const geometry_msgs::msg::PoseStamped &goal,
-        const builtin_interfaces::msg::Time &candidate_path_stamp
+        const builtin_interfaces::msg::Time &candidate_path_stamp,
+        const rclcpp::Time &trigger_time,
+        double path_block_detection_ms,
+        double front_end_ms
     );
     int findFirstPrimitiveId(
         const std::vector<HybridNode> &nodes,

@@ -47,9 +47,10 @@ namespace my_rrtstar_planner {
         nav_msgs::msg::Path createPlan(
             const geometry_msgs::msg::PoseStamped &start,
             const geometry_msgs::msg::PoseStamped &goal,
-            std::function<bool()> /*cancel_checker*/) override;
+            std::function<bool()> cancel_checker) override;
     private:
 
+        bool isCellTraversable(unsigned int mx, unsigned int my) const;
         bool isCollisionFreePath(int idx1, int idx2); // 检查两个节点之间的路径是否碰撞
         void updateChildrenCost(int parent_idx, double cost_delta); // 递归更新子节点代价
 
@@ -69,9 +70,10 @@ namespace my_rrtstar_planner {
         double step_size_ = 0.5; // 扩展步长，单位 m
         int max_iterations_ = 50000; // 最大迭代次数
         int max_iterations_after_goal_ = 1000; // 在找到目标后继续迭代以优化路径的次数
+        bool allow_unknown_ = true;
         double 
             search_radius_ = 2.0, // 用于重连
-            goal_sample_rate_ = 0.5, // 采样直接采中目标的概率
+            goal_sample_rate_ = 0.1, // 采样直接采中目标的概率
             goal_tolerance_ = 0.2, // 认为到达目标的距离阈值，单位 m
             collision_check_resolution_ = 0.02; // 碰撞检查的插值分辨率，单位 m
     };

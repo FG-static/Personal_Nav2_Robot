@@ -1,5 +1,6 @@
 #include "my_nav2_bt_nodes/manage_trajectory_action.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 
@@ -111,7 +112,9 @@ bool ManageTrajectoryAction::isSameGoal(
 bool ManageTrajectoryAction::shouldConsumeReplanEvent(
     const nav_msgs::msg::Path &candidate_path,
     const geometry_msgs::msg::PoseStamped &goal,
-    uint64_t &event_id
+    uint64_t &event_id,
+    builtin_interfaces::msg::Time &trigger_stamp,
+    uint8_t &reason
 ) {
 
     std::lock_guard<std::mutex> lock(event_mutex_);
@@ -127,6 +130,8 @@ bool ManageTrajectoryAction::shouldConsumeReplanEvent(
         return false;
 
     event_id = last_seen_event_id_;
+    trigger_stamp = event_trigger_stamp_;
+    reason = event_reason_;
     last_consumed_event_id_ = last_seen_event_id_;
     pending_replan_ = false;
     return true;
@@ -146,6 +151,7 @@ void ManageTrajectoryAction::onReplanEvent(
     pending_replan_ = true;
     last_seen_event_id_ = msg->event_id;
     last_replan_candidate_stamp_ = msg->candidate_path_stamp;
+    event_trigger_stamp_ = msg->header.stamp;
     event_goal_ = msg->goal;
     event_reason_ = msg->reason;
 
@@ -194,8 +200,15 @@ BT::NodeStatus ManageTrajectoryAction::tick() {
     }
 
     uint64_t consumed_event_id = 0;
+    builtin_interfaces::msg::Time trigger_stamp;
+    uint8_t consumed_event_reason = rm_interfaces::msg::ReplanEvent::UNKNOWN;
     const bool consume_replan_event =
-        shouldConsumeReplanEvent(input_path, goal, consumed_event_id);
+        shouldConsumeReplanEvent(
+            input_path,
+            goal,
+            consumed_event_id,
+            trigger_stamp,
+            consumed_event_reason);
 
     if (!has_active_path_ || isGoalChanged(goal) || consume_replan_event) {
 
@@ -204,10 +217,22 @@ BT::NodeStatus ManageTrajectoryAction::tick() {
         has_active_path_ = true;
 
         if (consume_replan_event) {
+            const double total_response_ms =
+                std::max(
+                    0.0,
+                    (node_->now() - rclcpp::Time(trigger_stamp)).seconds() * 1000.0);
+
             RCLCPP_INFO(
                 node_->get_logger(),
                 "ManageTrajectory consumed replan event id=%lu",
                 static_cast<unsigned long>(consumed_event_id));
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "REPLAN_METRICS stage=active_path event_id=%lu reason=%u "
+                "total_response_ms=%.3f",
+                static_cast<unsigned long>(consumed_event_id),
+                consumed_event_reason,
+                total_response_ms);
         }
     }
 
