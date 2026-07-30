@@ -100,6 +100,19 @@ namespace my_bspline_smoother {
         std::vector<SplineOvershoot> overshoots;
     };
 
+    struct BSplineSolveStats {
+
+        int outer_iterations = 0;
+        int osqp_iterations = 0;
+        bool constraints_satisfied = false;
+        double max_vel = 0.0;
+        double max_acc = 0.0;
+        double max_jerk = 0.0;
+        std::size_t point_violations = 0;
+        std::size_t segment_violations = 0;
+        std::size_t overshoots = 0;
+    };
+
     class MyBSplineSmoother : public nav2_core::Smoother {
 
     public:
@@ -263,6 +276,7 @@ namespace my_bspline_smoother {
         bool visualize_corridor_boxes_ = true;
         unsigned char corridor_lethal_cost_threshold_ =
             nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
+        BSplineSolveStats last_solve_stats_;
 
         const double Q_data[4][4] = {
             { 0.333333, -0.500000,  0.000000,  0.166667},

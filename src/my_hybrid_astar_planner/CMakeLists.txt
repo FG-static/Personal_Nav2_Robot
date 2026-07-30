@@ -14,6 +14,7 @@ find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(my_planning_metrics REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rm_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -37,6 +38,7 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   rclcpp
   rclcpp_lifecycle
   geometry_msgs
+  my_planning_metrics
   nav_msgs
   rm_interfaces
   std_msgs

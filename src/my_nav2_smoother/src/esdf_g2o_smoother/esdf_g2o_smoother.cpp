@@ -1,4 +1,5 @@
 #include "my_nav2_smoother/esdf_g2o_smoother/esdf_g2o_smoother.hpp"
+#include "my_planning_metrics/path_metrics.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -57,22 +58,61 @@ bool EsdfG2oSmoother::smooth(
     const rclcpp::Duration &/*max_time*/) {
 
     const auto total_start_time = std::chrono::steady_clock::now();
-    auto logTiming =
-        [&](double backend_optimization_ms) {
+    const nav_msgs::msg::Path input_path = path;
+    EsdfG2oOptimizationStats optimization_stats;
+    auto logMetrics =
+        [&](bool success, double backend_ms) {
+            const auto smoothing_end_time = std::chrono::steady_clock::now();
+            const double smoother_total_ms =
+                std::chrono::duration<double, std::milli>(
+                    smoothing_end_time - total_start_time).count();
 
-            const auto total_end_time = std::chrono::steady_clock::now();
-            const double total_ms =
-                std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+            const auto metrics_start_time = std::chrono::steady_clock::now();
+            const auto costmap = costmap_sub_ ? costmap_sub_->getCostmap() : nullptr;
+            my_planning_metrics::ObstacleDistanceField distance_field;
+            const bool distance_ready =
+                costmap != nullptr && distance_field.build(costmap.get());
+            const auto *field = distance_ready ? &distance_field : nullptr;
+            const my_planning_metrics::PathMetrics input_metrics =
+                my_planning_metrics::evaluatePath(input_path, field);
+            const my_planning_metrics::PathMetrics output_metrics =
+                my_planning_metrics::evaluatePath(path, field);
+            const double metrics_eval_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - metrics_start_time).count();
+
             RCLCPP_INFO(
                 node_->get_logger(),
-                "ESDF g2o smoother timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
-                0.0,
-                backend_optimization_ms,
-                total_ms);
+                "BACKEND_METRICS algorithm=ESDFG2O success=%s "
+                "backend_iterations=%d graph_vertices=%zu graph_edges=%zu "
+                "initial_chi2=%.6f final_chi2=%.6f backend_ms=%.3f "
+                "smoother_total_ms=%.3f metrics_eval_ms=%.3f "
+                "input_points=%zu output_points=%zu "
+                "input_length_m=%.3f output_length_m=%.3f "
+                "input_max_curvature_1pm=%.3f output_max_curvature_1pm=%.3f "
+                "input_min_lethal_obstacle_distance_m=%.3f "
+                "output_min_lethal_obstacle_distance_m=%.3f",
+                success ? "true" : "false",
+                optimization_stats.iterations,
+                optimization_stats.vertices,
+                optimization_stats.edges,
+                optimization_stats.initial_chi2,
+                optimization_stats.final_chi2,
+                backend_ms,
+                smoother_total_ms,
+                metrics_eval_ms,
+                input_metrics.point_count,
+                output_metrics.point_count,
+                input_metrics.length_m,
+                output_metrics.length_m,
+                input_metrics.max_curvature_inv_m,
+                output_metrics.max_curvature_inv_m,
+                input_metrics.min_lethal_obstacle_distance_m,
+                output_metrics.min_lethal_obstacle_distance_m);
         };
 
     if (path.poses.size() < 3) {
-        logTiming(0.0);
+        logMetrics(true, 0.0);
         return true;
     }
 
@@ -82,7 +122,7 @@ bool EsdfG2oSmoother::smooth(
         const double backend_optimization_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - backend_start_time).count();
-        logTiming(backend_optimization_ms);
+        logMetrics(false, backend_optimization_ms);
         return true;
     }
 
@@ -92,25 +132,27 @@ bool EsdfG2oSmoother::smooth(
         const double backend_optimization_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - backend_start_time).count();
-        logTiming(backend_optimization_ms);
+        logMetrics(false, backend_optimization_ms);
         return true;
     }
 
     const TrajectoryPoints reference_trajectory = trajectory;
     if (!optimizer_.optimize(trajectory, reference_trajectory, esdf_map_, config_)) {
+        optimization_stats = optimizer_.lastStats();
         RCLCPP_DEBUG(node_->get_logger(), "ESDF g2o optimizer skeleton kept raw path");
         const double backend_optimization_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - backend_start_time).count();
-        logTiming(backend_optimization_ms);
+        logMetrics(false, backend_optimization_ms);
         return true;
     }
 
+    optimization_stats = optimizer_.lastStats();
     updatePathFromTrajectory(path, trajectory);
     const double backend_optimization_ms =
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - backend_start_time).count();
-    logTiming(backend_optimization_ms);
+    logMetrics(true, backend_optimization_ms);
     return true;
 }
 

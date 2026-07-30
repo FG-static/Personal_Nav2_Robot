@@ -290,6 +290,7 @@ private:
     std::vector<MotionPrimitive> motion_primitives_;
     std::vector<double> heuristic_grid_;
     bool heuristic_ready_{false};
+    std::size_t last_grid_expanded_cells_{0};
     nav_msgs::msg::Path last_path_;
     bool has_last_path_{false};
     rclcpp::Time last_plan_time_{0, 0, RCL_ROS_TIME};

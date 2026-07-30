@@ -1,4 +1,5 @@
 #include "my_nav2_smoother/bspline_smoother.hpp"
+#include "my_planning_metrics/path_metrics.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -160,40 +161,83 @@ namespace my_bspline_smoother {
     ) {
 
         const auto total_start_time = std::chrono::steady_clock::now();
-        auto logTiming =
-            [&](double backend_optimization_ms) {
+        const nav_msgs::msg::Path input_path = path;
+        last_solve_stats_ = BSplineSolveStats{};
+        auto logMetrics =
+            [&](bool success, double backend_ms) {
+                const auto smoothing_end_time = std::chrono::steady_clock::now();
+                const double smoother_total_ms =
+                    std::chrono::duration<double, std::milli>(
+                        smoothing_end_time - total_start_time).count();
 
-                const auto total_end_time = std::chrono::steady_clock::now();
-                const double total_ms =
-                    std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+                const auto metrics_start_time = std::chrono::steady_clock::now();
+                const auto costmap = costmap_sub_ ? costmap_sub_->getCostmap() : nullptr;
+                my_planning_metrics::ObstacleDistanceField distance_field;
+                const bool distance_ready =
+                    costmap != nullptr && distance_field.build(costmap.get());
+                const auto *field = distance_ready ? &distance_field : nullptr;
+                const my_planning_metrics::PathMetrics input_metrics =
+                    my_planning_metrics::evaluatePath(input_path, field);
+                const my_planning_metrics::PathMetrics output_metrics =
+                    my_planning_metrics::evaluatePath(path, field);
+                const double metrics_eval_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - metrics_start_time).count();
+
                 RCLCPP_INFO(
                     node_->get_logger(),
-                    "B-Spline smoother timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
-                    0.0,
-                    backend_optimization_ms,
-                    total_ms);
+                    "BACKEND_METRICS algorithm=BSplineOSQP success=%s "
+                    "constraints_satisfied=%s backend_iterations=%d "
+                    "osqp_iterations=%d backend_ms=%.3f smoother_total_ms=%.3f "
+                    "metrics_eval_ms=%.3f input_points=%zu output_points=%zu "
+                    "input_length_m=%.3f output_length_m=%.3f "
+                    "input_max_curvature_1pm=%.3f output_max_curvature_1pm=%.3f "
+                    "input_min_lethal_obstacle_distance_m=%.3f "
+                    "output_min_lethal_obstacle_distance_m=%.3f "
+                    "max_vel_mps=%.3f max_acc_mps2=%.3f max_jerk_mps3=%.3f "
+                    "point_violations=%zu segment_violations=%zu overshoots=%zu",
+                    success ? "true" : "false",
+                    last_solve_stats_.constraints_satisfied ? "true" : "false",
+                    last_solve_stats_.outer_iterations,
+                    last_solve_stats_.osqp_iterations,
+                    backend_ms,
+                    smoother_total_ms,
+                    metrics_eval_ms,
+                    input_metrics.point_count,
+                    output_metrics.point_count,
+                    input_metrics.length_m,
+                    output_metrics.length_m,
+                    input_metrics.max_curvature_inv_m,
+                    output_metrics.max_curvature_inv_m,
+                    input_metrics.min_lethal_obstacle_distance_m,
+                    output_metrics.min_lethal_obstacle_distance_m,
+                    last_solve_stats_.max_vel,
+                    last_solve_stats_.max_acc,
+                    last_solve_stats_.max_jerk,
+                    last_solve_stats_.point_violations,
+                    last_solve_stats_.segment_violations,
+                    last_solve_stats_.overshoots);
             };
 
         if (path.poses.size() < 4) {
-            logTiming(0.0);
+            logMetrics(true, 0.0);
             return true;
         }
 
-        nav_msgs::msg::Path raw_path = path;
         const auto backend_start_time = std::chrono::steady_clock::now();
-        if (!applyBSplineAlgorithm(path, raw_path)) {
-            path = raw_path;
+        if (!applyBSplineAlgorithm(path, input_path)) {
+            path = input_path;
             const double backend_optimization_ms =
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - backend_start_time).count();
-            logTiming(backend_optimization_ms);
+            logMetrics(false, backend_optimization_ms);
             return false;
         }
 
         const double backend_optimization_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - backend_start_time).count();
-        logTiming(backend_optimization_ms);
+        logMetrics(true, backend_optimization_ms);
         return true;
     }
     bool MyBSplineSmoother::applyBSplineAlgorithm(
@@ -1252,6 +1296,7 @@ namespace my_bspline_smoother {
         std::vector<double> &p_smooth_y
     ) {
 
+        last_solve_stats_ = BSplineSolveStats{};
         std::vector<double> dt_segment;
         computeTimeAllocation(p_ref_x, p_ref_y, dt_segment);
         const CorridorBounds bounds = buildCorridorBounds(p_ref_x, p_ref_y);
@@ -1262,6 +1307,7 @@ namespace my_bspline_smoother {
 
         const int max_iterations = std::max(1, max_outer_iterations_);
         for (int iter = 0; iter < max_iterations; ++ iter) {
+            last_solve_stats_.outer_iterations = iter + 1;
 
             if (!solveBSplineQPOnce(
                     p_ref_x,
@@ -1300,6 +1346,13 @@ namespace my_bspline_smoother {
                     );
             }
 
+            last_solve_stats_.max_vel = dynamic_report.max_vel;
+            last_solve_stats_.max_acc = dynamic_report.max_acc;
+            last_solve_stats_.max_jerk = dynamic_report.max_jerk;
+            last_solve_stats_.point_violations = corridor_report.point_vios.size();
+            last_solve_stats_.segment_violations = corridor_report.segment_vios.size();
+            last_solve_stats_.overshoots = overshoot_report.overshoots.size();
+
             RCLCPP_DEBUG(
                 node_->get_logger(),
                 "B-Spline check iter=%d dyn_ok=%d corridor_ok=%d overshoot_ok=%d max_v=%.3f max_a=%.3f max_j=%.3f point_vios=%zu segment_vios=%zu overshoots=%zu extra_constraints=%zu",
@@ -1315,8 +1368,10 @@ namespace my_bspline_smoother {
                 overshoot_report.overshoots.size(),
                 extra_constraints.size());
 
-            if (dynamic_report.ok && corridor_report.ok && overshoot_report.ok)
+            if (dynamic_report.ok && corridor_report.ok && overshoot_report.ok) {
+                last_solve_stats_.constraints_satisfied = true;
                 return true;
+            }
 
             if (!dynamic_report.ok && iter + 1 < max_iterations)
                 inflateTimeAllocation(dynamic_report, dt_segment);
@@ -1481,6 +1536,8 @@ namespace my_bspline_smoother {
         if (status == 0 && work) {
 
             osqp_solve(work);
+            if (work->info)
+                last_solve_stats_.osqp_iterations += static_cast<int>(work->info->iter);
             if (work->info->status_val >= 0 && work->solution) {
 
                 p_smooth_x.resize(n);
@@ -1492,6 +1549,8 @@ namespace my_bspline_smoother {
             osqp_update_lin_cost(work, f_y.data());
             osqp_update_bounds(work, l_y.data(), u_y.data());
             osqp_solve(work);
+            if (work->info)
+                last_solve_stats_.osqp_iterations += static_cast<int>(work->info->iter);
             if (work->info->status_val >= 0 && work->solution) {
 
                 p_smooth_y.resize(n);

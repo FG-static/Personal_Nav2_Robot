@@ -1,8 +1,10 @@
 #include "my_rrtstar_planner/rrtstar_planner.hpp"
+#include "my_planning_metrics/path_metrics.hpp"
 #include "nav2_core/planner_exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
@@ -100,18 +102,59 @@ namespace my_rrtstar_planner {
         std::function<bool()> /*cancel_checker*/) {
 
         const auto total_start_time = std::chrono::steady_clock::now();
-        auto logTiming =
-            [&](double front_end_search_ms, double backend_optimization_ms) {
+        auto logMetrics =
+            [&](
+                bool success,
+                int iterations,
+                int first_solution_iteration,
+                std::size_t tree_nodes,
+                std::size_t rewire_count,
+                double first_solution_ms,
+                double refinement_ms,
+                double front_end_ms,
+                const nav_msgs::msg::Path &path
+            ) {
+                const auto planning_end_time = std::chrono::steady_clock::now();
+                const double planner_total_ms =
+                    std::chrono::duration<double, std::milli>(
+                        planning_end_time - total_start_time).count();
 
-                const auto total_end_time = std::chrono::steady_clock::now();
-                const double total_ms =
-                    std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+                const auto metrics_start_time = std::chrono::steady_clock::now();
+                my_planning_metrics::ObstacleDistanceField distance_field;
+                const bool distance_ready =
+                    !path.poses.empty() && distance_field.build(costmap_);
+                const my_planning_metrics::PathMetrics path_metrics =
+                    my_planning_metrics::evaluatePath(
+                        path,
+                        distance_ready ? &distance_field : nullptr);
+                const double metrics_eval_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - metrics_start_time).count();
+
                 RCLCPP_INFO(
                     node_->get_logger(),
-                    "RRT* timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
-                    front_end_search_ms,
-                    backend_optimization_ms,
-                    total_ms);
+                    "FRONTEND_METRICS algorithm=RRTStar success=%s reused=false "
+                    "expanded_nodes=%zu tree_nodes=%zu iterations=%d "
+                    "first_solution_iteration=%d rewires=%zu first_solution_ms=%.3f "
+                    "front_end_refinement_ms=%.3f front_end_ms=%.3f "
+                    "planner_total_ms=%.3f metrics_eval_ms=%.3f path_points=%zu "
+                    "path_length_m=%.3f max_curvature_1pm=%.3f "
+                    "min_lethal_obstacle_distance_m=%.3f",
+                    success ? "true" : "false",
+                    tree_nodes,
+                    tree_nodes,
+                    iterations,
+                    first_solution_iteration,
+                    rewire_count,
+                    first_solution_ms,
+                    refinement_ms,
+                    front_end_ms,
+                    planner_total_ms,
+                    metrics_eval_ms,
+                    path_metrics.point_count,
+                    path_metrics.length_m,
+                    path_metrics.max_curvature_inv_m,
+                    path_metrics.min_lethal_obstacle_distance_m);
             };
 
         nav_msgs::msg::Path global_path;
@@ -124,7 +167,7 @@ namespace my_rrtstar_planner {
             !costmap_->worldToMap(goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal)) {
 
             RCLCPP_ERROR(node_->get_logger(), "Start or Goal is outside of costmap bounds");
-            logTiming(0.0, 0.0);
+            logMetrics(false, 0, -1, 0, 0, -1.0, 0.0, 0.0, global_path);
             return global_path;
         }
 
@@ -154,7 +197,11 @@ namespace my_rrtstar_planner {
         auto search_start_time = std::chrono::steady_clock::now();
         std::chrono::steady_clock::time_point first_solution_time;
         bool has_first_solution_time = false;
+        int iterations_executed = 0;
+        int first_solution_iteration = -1;
+        std::size_t rewire_count = 0;
         for (int iter = 0; iter < max_iterations_; ++ iter) {
+            iterations_executed = iter + 1;
 
             // 如果找到更优路径，更新 best_cost 和 found_path
             double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
@@ -270,6 +317,7 @@ namespace my_rrtstar_planner {
                             // 递归更新该节点所有子节点的代价
                             double cost_delta = cost_via_new_node - old_cost;
                             updateChildrenCost(i, cost_delta);
+                            ++rewire_count;
                         }
                     }
                 }
@@ -293,9 +341,9 @@ namespace my_rrtstar_planner {
 	                    if (stop_iter == 0) {
                             first_solution_time = std::chrono::steady_clock::now();
                             has_first_solution_time = true;
+                            first_solution_iteration = iter + 1;
                             RCLCPP_INFO(node_->get_logger(), "RRT* found a path to the goal in %d iterations, now optimizing...", iter + 1);
                         }
-	                    RCLCPP_INFO(node_->get_logger(), "RRT* successfully found a path to the goal in %d iterations", iter + 1);
                     double cost_to_goal = cost_to_new_node + std::sqrt(dist_to_goal_sqrd);
                     if (cost_to_goal < best_cost) {
 
@@ -316,12 +364,15 @@ namespace my_rrtstar_planner {
             }
         }
         const auto search_end_time = std::chrono::steady_clock::now();
-        const double front_end_search_ms = has_first_solution_time ?
+        const double first_solution_ms = has_first_solution_time ?
             std::chrono::duration<double, std::milli>(first_solution_time - search_start_time).count() :
-            std::chrono::duration<double, std::milli>(search_end_time - search_start_time).count();
-        const double backend_optimization_ms = has_first_solution_time ?
+            -1.0;
+        const double refinement_ms = has_first_solution_time ?
             std::chrono::duration<double, std::milli>(search_end_time - first_solution_time).count() :
             0.0;
+        const double front_end_ms =
+            std::chrono::duration<double, std::milli>(
+                search_end_time - search_start_time).count();
 
         if (found_path && goal_node_idx != -1) {
 
@@ -372,7 +423,17 @@ namespace my_rrtstar_planner {
             global_path.poses.clear();
             RCLCPP_WARN(node_->get_logger(), "RRT* failed to find a path from start to goal");
         }
-        logTiming(front_end_search_ms, backend_optimization_ms);
+        const bool success = found_path && goal_node_idx != -1 && !global_path.poses.empty();
+        logMetrics(
+            success,
+            iterations_executed,
+            first_solution_iteration,
+            tree.size(),
+            rewire_count,
+            first_solution_ms,
+            refinement_ms,
+            front_end_ms,
+            global_path);
         return global_path;
     }
 

@@ -19,6 +19,7 @@ bool EsdfG2oOptimizer::optimize(
     const EsdfMap &esdf_map,
     const EsdfG2oSmootherConfig &config) {
 
+    last_stats_ = EsdfG2oOptimizationStats{};
     if (trajectory.empty() || reference_trajectory.size() != trajectory.size() ||
         !esdf_map.isReady())
         return false;
@@ -36,9 +37,16 @@ bool EsdfG2oOptimizer::optimize(
         return false;
     }
 
+    last_stats_.vertices = optimizer_.vertices().size();
+    last_stats_.edges = optimizer_.edges().size();
     optimizer_.initializeOptimization();
     optimizer_.setVerbose(config.optimizer_verbose);
+    optimizer_.computeActiveErrors();
+    last_stats_.initial_chi2 = optimizer_.activeChi2();
     const int iterations = optimizer_.optimize(std::max(1, config.no_iterations));
+    last_stats_.iterations = std::max(0, iterations);
+    optimizer_.computeActiveErrors();
+    last_stats_.final_chi2 = optimizer_.activeChi2();
     if (iterations <= 0) {
         clear();
         return false;

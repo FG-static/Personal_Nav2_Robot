@@ -1,8 +1,10 @@
 #include "my_nav2_planner/astar_planner.hpp"
+#include "my_planning_metrics/path_metrics.hpp"
 #include "nav2_core/planner_exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <unordered_map>
@@ -39,18 +41,50 @@ namespace my_nav2_planner {
         std::function<bool()> /*cancel_checker*/) {
 
         const auto total_start_time = std::chrono::steady_clock::now();
-        auto logTiming =
-            [&](double front_end_search_ms, double backend_optimization_ms) {
+        auto logMetrics =
+            [&](
+                bool success,
+                double front_end_ms,
+                std::size_t expanded_nodes,
+                std::size_t generated_nodes,
+                std::size_t open_peak,
+                const nav_msgs::msg::Path &path
+            ) {
+                const auto planning_end_time = std::chrono::steady_clock::now();
+                const double planner_total_ms =
+                    std::chrono::duration<double, std::milli>(
+                        planning_end_time - total_start_time).count();
 
-                const auto total_end_time = std::chrono::steady_clock::now();
-                const double total_ms =
-                    std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+                const auto metrics_start_time = std::chrono::steady_clock::now();
+                my_planning_metrics::ObstacleDistanceField distance_field;
+                const bool distance_ready =
+                    !path.poses.empty() && distance_field.build(costmap_);
+                const my_planning_metrics::PathMetrics path_metrics =
+                    my_planning_metrics::evaluatePath(
+                        path,
+                        distance_ready ? &distance_field : nullptr);
+                const double metrics_eval_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - metrics_start_time).count();
+
                 RCLCPP_INFO(
                     node_->get_logger(),
-                    "A* timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
-                    front_end_search_ms,
-                    backend_optimization_ms,
-                    total_ms);
+                    "FRONTEND_METRICS algorithm=AStar success=%s reused=false "
+                    "expanded_nodes=%zu generated_nodes=%zu open_peak=%zu "
+                    "front_end_ms=%.3f planner_total_ms=%.3f metrics_eval_ms=%.3f "
+                    "path_points=%zu path_length_m=%.3f max_curvature_1pm=%.3f "
+                    "min_lethal_obstacle_distance_m=%.3f",
+                    success ? "true" : "false",
+                    expanded_nodes,
+                    generated_nodes,
+                    open_peak,
+                    front_end_ms,
+                    planner_total_ms,
+                    metrics_eval_ms,
+                    path_metrics.point_count,
+                    path_metrics.length_m,
+                    path_metrics.max_curvature_inv_m,
+                    path_metrics.min_lethal_obstacle_distance_m);
             };
 
         nav_msgs::msg::Path global_path;
@@ -63,7 +97,7 @@ namespace my_nav2_planner {
             !costmap_->worldToMap(goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal)) {
 
             RCLCPP_ERROR(node_->get_logger(), "Start or Goal is outside of costmap bounds");
-            logTiming(0.0, 0.0);
+            logMetrics(false, 0.0, 0, 0, 0, global_path);
             return global_path;
         }
 
@@ -83,15 +117,19 @@ namespace my_nav2_planner {
         g_values[start_idx] = 0.0;
         open_list.push({0.0, start_idx});
 
-	        bool found_path = false;
+        bool found_path = false;
+        std::vector<bool> discovered(static_cast<std::size_t>(map_size), false);
+        discovered[start_idx] = true;
+        std::size_t expanded_nodes = 0;
+        std::size_t generated_nodes = 1;
+        std::size_t open_peak = 1;
 
-	        // 记录算法耗时
-	        auto search_start_time = std::chrono::steady_clock::now();
-	        // 开始寻路
+        const auto search_start_time = std::chrono::steady_clock::now();
         while (!open_list.empty()) {
 
             int cur_idx = open_list.top().second;
             open_list.pop();
+            ++expanded_nodes;
 
             if (cur_idx == goal_idx) {
 
@@ -122,25 +160,31 @@ namespace my_nav2_planner {
 
                     if (tentative_g < g_values[next_idx]) {
 
+                        if (!discovered[next_idx]) {
+                            discovered[next_idx] = true;
+                            ++generated_nodes;
+                        }
                         g_values[next_idx] = tentative_g;
                         parent_map[next_idx] = cur_idx;
 
                         double h_cost = std::sqrt(std::pow(nx - (int)mx_goal, 2) + 
                                         std::pow(ny - (int)my_goal, 2));
                         open_list.push({tentative_g + h_cost, next_idx});
+                        open_peak = std::max(open_peak, open_list.size());
                     }
-	                }
-	            }
-	        }
-            const auto search_end_time = std::chrono::steady_clock::now();
-            const double search_ms =
-                std::chrono::duration<double, std::milli>(search_end_time - search_start_time).count();
-	        
-	        if (found_path) {
-	
-	            std::vector<int> path_;
-	            int curr_idx = goal_idx;
-	            while (curr_idx != -1) {
+                }
+            }
+        }
+        const auto search_end_time = std::chrono::steady_clock::now();
+        const double search_ms =
+            std::chrono::duration<double, std::milli>(
+                search_end_time - search_start_time).count();
+
+        if (found_path) {
+
+            std::vector<int> path_;
+            int curr_idx = goal_idx;
+            while (curr_idx != -1) {
 
                 path_.push_back(curr_idx);
                 curr_idx = parent_map[curr_idx];
@@ -163,14 +207,21 @@ namespace my_nav2_planner {
                 pose.pose.orientation = goal.pose.orientation;
                 global_path.poses.push_back(pose);
             }
-	        } else {
+        } else {
 
-	            global_path.poses.clear();
-	            RCLCPP_WARN(node_->get_logger(), "A* failed to find a path from start to goal");
-	        }
-            logTiming(search_ms, 0.0);
-	        return global_path;
-	    } 
+            global_path.poses.clear();
+            RCLCPP_WARN(node_->get_logger(), "A* failed to find a path from start to goal");
+        }
+
+        logMetrics(
+            found_path,
+            search_ms,
+            expanded_nodes,
+            generated_nodes,
+            open_peak,
+            global_path);
+        return global_path;
+    }
 }// namespace my_nav2_planner
 
 PLUGINLIB_EXPORT_CLASS(my_nav2_planner::MyAStarPlanner, nav2_core::GlobalPlanner)

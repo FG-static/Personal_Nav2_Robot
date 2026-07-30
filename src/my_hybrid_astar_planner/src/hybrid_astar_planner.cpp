@@ -1,4 +1,5 @@
 #include "my_hybrid_astar_planner/hybrid_astar_planner.hpp"
+#include "my_planning_metrics/path_metrics.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -324,18 +325,58 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     has_primitive_cost_goal_ = false;
 
     const auto total_start_time = std::chrono::steady_clock::now();
-    auto logTiming =
-        [&](double front_end_search_ms, double backend_optimization_ms) {
+    int expanded_iterations = 0;
+    std::size_t generated_nodes = 0;
+    std::size_t open_peak = 0;
+    last_grid_expanded_cells_ = 0;
+    auto logMetrics =
+        [&](
+            bool success,
+            bool reused,
+            double front_end_ms,
+            const nav_msgs::msg::Path &path
+        ) {
+            const auto planning_end_time = std::chrono::steady_clock::now();
+            const double planner_total_ms =
+                std::chrono::duration<double, std::milli>(
+                    planning_end_time - total_start_time).count();
 
-            const auto total_end_time = std::chrono::steady_clock::now();
-            const double total_ms =
-                std::chrono::duration<double, std::milli>(total_end_time - total_start_time).count();
+            const auto metrics_start_time = std::chrono::steady_clock::now();
+            my_planning_metrics::ObstacleDistanceField distance_field;
+            const bool distance_ready =
+                !path.poses.empty() && distance_field.build(costmap_);
+            const my_planning_metrics::PathMetrics path_metrics =
+                my_planning_metrics::evaluatePath(
+                    path,
+                    distance_ready ? &distance_field : nullptr);
+            const double metrics_eval_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - metrics_start_time).count();
+            const std::size_t hybrid_expanded_nodes =
+                static_cast<std::size_t>(std::max(0, expanded_iterations));
+
             RCLCPP_INFO(
                 node_->get_logger(),
-                "Hybrid A* timing: front_end_search_ms=%.3f backend_optimization_ms=%.3f total_ms=%.3f",
-                front_end_search_ms,
-                backend_optimization_ms,
-                total_ms);
+                "FRONTEND_METRICS algorithm=HybridAStar success=%s reused=%s "
+                "grid_expanded_cells=%zu hybrid_expanded_nodes=%zu "
+                "expanded_nodes=%zu generated_nodes=%zu open_peak=%zu "
+                "front_end_ms=%.3f planner_total_ms=%.3f metrics_eval_ms=%.3f "
+                "path_points=%zu path_length_m=%.3f max_curvature_1pm=%.3f "
+                "min_lethal_obstacle_distance_m=%.3f",
+                success ? "true" : "false",
+                reused ? "true" : "false",
+                last_grid_expanded_cells_,
+                hybrid_expanded_nodes,
+                last_grid_expanded_cells_ + hybrid_expanded_nodes,
+                generated_nodes,
+                open_peak,
+                front_end_ms,
+                planner_total_ms,
+                metrics_eval_ms,
+                path_metrics.point_count,
+                path_metrics.length_m,
+                path_metrics.max_curvature_inv_m,
+                path_metrics.min_lethal_obstacle_distance_m);
         };
 
     nav_msgs::msg::Path global_path;
@@ -345,7 +386,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     if (cancel_checker && cancel_checker()) {
 
         RCLCPP_WARN(node_->get_logger(), "Hybrid A* planning cancelled before search start");
-        logTiming(0.0, 0.0);
+        logMetrics(false, false, 0.0, global_path);
         return global_path;
     }
 
@@ -355,7 +396,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     unsigned int my_goal = 0;
     if (!validatePose(start, mx_start, my_start, "start") ||
         !validatePose(goal, mx_goal, my_goal, "goal")) {
-        logTiming(0.0, 0.0);
+        logMetrics(false, false, 0.0, global_path);
         return global_path;
     }
 
@@ -366,7 +407,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
         global_path.poses.push_back(start);
         global_path.poses.push_back(goal);
-        logTiming(0.0, 0.0);
+        logMetrics(true, false, 0.0, global_path);
         return global_path;
     }
     primitive_cost_goal_ = goal_pose;
@@ -396,7 +437,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
                 reused.header.frame_id = global_frame_;
                 reused.header.stamp = now;
-                logTiming(0.0, 0.0);
+                logMetrics(true, true, 0.0, reused);
                 return reused;
             }
         }
@@ -414,7 +455,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
         const double front_end_search_ms =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - front_end_start_time).count();
-        logTiming(front_end_search_ms, 0.0);
+        logMetrics(false, false, front_end_search_ms, global_path);
         return global_path;
     }
 
@@ -461,14 +502,15 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     nodes.push_back(start_node);
     node_lookup[start_node.key] = 0;
+    generated_nodes = 1;
     open_list.push({
         start_node.f,
         start_node.h_grid + start_node.h_yaw + start_node.h_goal_dist,
         start_node.g,
         0});
+    open_peak = 1;
 
     const rclcpp::Time search_start_time = node_->now();
-    int expanded_iterations = 0;
     std::vector<PrimitiveCostDebug> root_primitive_costs;
 
     // 搜索
@@ -480,7 +522,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             const double front_end_search_ms =
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - front_end_start_time).count();
-            logTiming(front_end_search_ms, 0.0);
+            logMetrics(false, false, front_end_search_ms, global_path);
             return nav_msgs::msg::Path{};
         }
 
@@ -494,7 +536,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             const double front_end_search_ms =
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - front_end_start_time).count();
-            logTiming(front_end_search_ms, 0.0);
+            logMetrics(false, false, front_end_search_ms, global_path);
             return global_path;
         }
 
@@ -510,7 +552,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             const double front_end_search_ms =
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - front_end_start_time).count();
-            logTiming(front_end_search_ms, 0.0);
+            logMetrics(false, false, front_end_search_ms, global_path);
             return global_path;
         }
 
@@ -525,7 +567,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             const double front_end_search_ms =
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - front_end_start_time).count();
-            logTiming(front_end_search_ms, 0.0);
+            logMetrics(false, false, front_end_search_ms, global_path);
             return global_path;
         }
 
@@ -562,7 +604,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
             const double front_end_search_ms =
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - front_end_start_time).count();
-            logTiming(front_end_search_ms, 0.0);
+            logMetrics(true, false, front_end_search_ms, planned_path);
             return planned_path;
         }
 
@@ -651,7 +693,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                     const double front_end_search_ms =
                         std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - front_end_start_time).count();
-                    logTiming(front_end_search_ms, 0.0);
+                    logMetrics(false, false, front_end_search_ms, global_path);
                     return global_path;
                 }
 
@@ -665,6 +707,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
                 const int new_index = static_cast<int>(nodes.size());
                 nodes.push_back(next_node);
+                ++generated_nodes;
                 node_lookup[next_key] = new_index;
                 if (debug_cost_index < root_primitive_costs.size())
                     root_primitive_costs[debug_cost_index].accepted = true;
@@ -673,6 +716,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                     next_node.h_grid + next_node.h_yaw + next_node.h_goal_dist,
                     next_node.g,
                     new_index});
+                open_peak = std::max(open_peak, open_list.size());
             } else { // 非同一路径拓展过的
 
                 HybridNode &old_node = nodes[it->second];
@@ -691,6 +735,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
                         old_node.h_grid + old_node.h_yaw + old_node.h_goal_dist,
                         old_node.g,
                         it->second});
+                    open_peak = std::max(open_peak, open_list.size());
                 }
             }
         }
@@ -708,7 +753,7 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     const double front_end_search_ms =
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - front_end_start_time).count();
-    logTiming(front_end_search_ms, 0.0);
+    logMetrics(false, false, front_end_search_ms, global_path);
     return global_path;
 }
 
@@ -1559,6 +1604,7 @@ bool MyHybridAStarPlanner::computeGridHeuristic(
 
     heuristic_grid_.assign(map_size, std::numeric_limits<double>::infinity());
     heuristic_ready_ = false;
+    last_grid_expanded_cells_ = 0;
 
     using GridQueueNode = std::pair<double, unsigned int>;
     std::priority_queue<GridQueueNode,
@@ -1585,6 +1631,7 @@ bool MyHybridAStarPlanner::computeGridHeuristic(
         open_list.pop();
 
         if (cur_cost > heuristic_grid_[cur_idx]) continue;
+        ++last_grid_expanded_cells_;
 
         const unsigned int
             cx = cur_idx % width,
