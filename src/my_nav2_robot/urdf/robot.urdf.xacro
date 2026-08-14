@@ -161,6 +161,30 @@
         <origin xyz="0 0 ${chassis_height + laser_height / 2}" rpy="0 0 0"/>
     </joint>
 
+    <!-- Mid360-style 3D LiDAR used by the LIO frontend. -->
+    <link name="livox_frame">
+        <visual>
+            <geometry>
+                <cylinder radius="0.04" length="0.05"/>
+            </geometry>
+            <material name="red"/>
+        </visual>
+        <xacro:inertial_cylinder mass="0.2" r="0.04" h="0.05">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <joint name="livox_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="livox_frame"/>
+        <origin xyz="0 0 0.12" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Keep the 3D LiDAR on its own SDF link instead of merging both lidars. -->
+    <gazebo reference="livox_joint">
+        <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+
     <!--深度相机-->
     <!--物理位置-->
     <!-- <link name="camera_link">
@@ -226,6 +250,27 @@
         </sensor>
     </gazebo>
 
+    <!-- Mid360 CSV scan pattern with per-point timestamps for the LIO frontend. -->
+    <gazebo>
+        <plugin
+            filename="libmy_nav2_robot_mid360_gz_plugin.so"
+            name="my_nav2_robot::Mid360GzPlugin">
+            <tracking_link_name>livox_frame</tracking_link_name>
+            <sensor_pose>0 0 0 0 0 0</sensor_pose>
+            <frame_id>livox_frame</frame_id>
+            <topic>/livox/lidar</topic>
+            <csv_file_name>$(find my_nav2_robot)/config/mid360.csv</csv_file_name>
+            <samples_per_scan>20000</samples_per_scan>
+            <downsample>1</downsample>
+            <update_rate>10.0</update_rate>
+            <min_range>0.2</min_range>
+            <max_range>12.0</max_range>
+            <range_noise_stddev>0.005</range_noise_stddev>
+            <dropout_rate>0.0</dropout_rate>
+            <noise_seed>42</noise_seed>
+        </plugin>
+    </gazebo>
+
     <!--深度相机插件-->
     <!-- <gazebo reference="camera_link">
         <sensor name="depth_camera" type="rgbd_camera">
@@ -251,18 +296,17 @@
     <!--imu插件-->
     <gazebo reference="imu_link">
         <sensor name="imu" type="imu">
-            <update_rate>100.0</update_rate> <!-- 原100hz，到时候再改回来 -->
-            <topic>imu</topic>
+            <update_rate>200.0</update_rate>
+            <topic>/livox/imu</topic>
             <gz_frame_id>imu_link</gz_frame_id>
         </sensor>
     </gazebo>
 
-    <!--全局挂载插件-->
+    <!-- sensors.sdf has an IMU system but no rendering sensor system. -->
     <gazebo>
         <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
             <render_engine>ogre2</render_engine>
         </plugin>
-        <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
     </gazebo>
 
     <!-- 差速驱动插件 -->
@@ -340,10 +384,11 @@
         <plugin
             filename="gz-sim-odometry-publisher-system"
             name="gz::sim::systems::OdometryPublisher">
-            <odom_topic>/ground_truth</odom_topic>  <!--里程计请用此话题！！！-->
+            <odom_topic>/ground_truth</odom_topic>  <!-- Ground truth is retained only for evaluation. -->
             <odom_frame>odom</odom_frame>
             <robot_base_frame>base_footprint</robot_base_frame>
-            <tf_topic>/tf</tf_topic>
+            <!-- Keep ground-truth odometry for evaluation without competing with BIEVR-LIO TF. -->
+            <tf_topic>/ground_truth_tf</tf_topic>
             <dimensions>3</dimensions>
         </plugin>
     </gazebo>

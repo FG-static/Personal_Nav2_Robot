@@ -26,6 +26,7 @@ venv/
 # --- Gazebo & Logs ---
 *.log
 /tmp/
+compile_commands.json
 
 # --- AI ---
 AGENTS.md

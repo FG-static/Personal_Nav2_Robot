@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(my_nav2_robot)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -16,9 +19,14 @@ find_package(sensor_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(tf2_eigen REQUIRED)
+find_package(gz-sim8 REQUIRED
+  HINTS /opt/ros/$ENV{ROS_DISTRO}/opt/gz_sim_vendor/lib/cmake)
+find_package(gz-plugin2 REQUIRED
+  HINTS /opt/ros/$ENV{ROS_DISTRO}/opt/gz_plugin_vendor/lib/cmake)
 
 add_executable(robot_driver src/robot_driver.cpp)
 add_executable(odom_evaluator src/odom_evaluator.cpp)
+add_library(my_nav2_robot_mid360_gz_plugin SHARED src/mid360_gz_plugin.cpp)
 
 ament_target_dependencies(robot_driver
     rclcpp
@@ -29,19 +37,45 @@ ament_target_dependencies(robot_driver
 )
 
 ament_target_dependencies(odom_evaluator
-    rclcpp 
-    geometry_msgs 
-    nav_msgs 
-    tf2 
+    rclcpp
+    geometry_msgs
+    nav_msgs
+    tf2
     tf2_ros
     tf2_eigen
     Sophus
 )
+
+target_include_directories(my_nav2_robot_mid360_gz_plugin PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(my_nav2_robot_mid360_gz_plugin
+    rclcpp
+    sensor_msgs
+)
+
+target_link_libraries(my_nav2_robot_mid360_gz_plugin
+  gz-sim8::core
+  gz-plugin2::register
+)
+
 # 安装
 install(TARGETS
   robot_driver
   odom_evaluator
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS my_nav2_robot_mid360_gz_plugin
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY include/
+  DESTINATION include
 )
 
 install(DIRECTORY launch
@@ -64,8 +98,16 @@ install(DIRECTORY maps
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(DIRECTORY models
+  DESTINATION share/${PROJECT_NAME}
+)
+
 install(DIRECTORY behavior_trees
   DESTINATION share/${PROJECT_NAME}
+)
+
+ament_environment_hooks(
+  "${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/${PROJECT_NAME}.dsv.in"
 )
 
 if(BUILD_TESTING)
