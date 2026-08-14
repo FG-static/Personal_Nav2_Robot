@@ -27,6 +27,7 @@ venv/
 *.log
 /tmp/
 compile_commands.json
+mid360.csv
 
 # --- AI ---
 AGENTS.md
