@@ -19,6 +19,8 @@ Panels:
         - /Image1/Topic1
         - /Path3
         - /MarkerArray3
+        - /PointCloud22
+        - /PointCloud22/Topic1
       Splitter Ratio: 0.5
     Tree Height: 1316
   - Class: rviz_common/Selection
@@ -107,6 +109,11 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
+        livox_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
         rear_left_wheel_link:
           Alpha: 1
           Show Axes: false
@@ -140,9 +147,9 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: -999999
+      Max Intensity: 0
       Min Color: 0; 0; 0
-      Min Intensity: 999999
+      Min Intensity: 0
       Name: LaserScan
       Position Transformer: XYZ
       Selectable: true
@@ -227,6 +234,8 @@ Visualization Manager:
           Value: true
         laser_link:
           Value: true
+        livox_frame:
+          Value: true
         map:
           Value: true
         odom:
@@ -252,6 +261,8 @@ Visualization Manager:
                 imu_link:
                   {}
                 laser_link:
+                  {}
+                livox_frame:
                   {}
                 rear_left_wheel_link:
                   {}
@@ -362,6 +373,7 @@ Visualization Manager:
         Value: /depth_camera/image
       Value: false
       Visibility:
+        "": true
         Grid: true
         Image: true
         LaserScan: true
@@ -451,6 +463,39 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /trajectory_generation/primitive_costs
+      Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: Intensity
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 236.2135009765625
+      Min Color: 0; 0; 0
+      Min Intensity: 1
+      Name: PointCloud2
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.009999999776482582
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /livox/lidar
+      Use Fixed Frame: true
+      Use rainbow: true
       Value: true
   Enabled: true
   Global Options:

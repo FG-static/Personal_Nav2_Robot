@@ -293,16 +293,7 @@
         </sensor>
     </gazebo> -->
 
-    <!--imu插件-->
-    <gazebo reference="imu_link">
-        <sensor name="imu" type="imu">
-            <update_rate>200.0</update_rate>
-            <topic>/livox/imu_raw</topic>
-            <gz_frame_id>imu_link</gz_frame_id>
-        </sensor>
-    </gazebo>
-
-    <!-- sensors.sdf has an IMU system but no rendering sensor system. -->
+    <!-- Rendering sensor system required by the 2D GPU lidar. -->
     <gazebo>
         <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
             <render_engine>ogre2</render_engine>
@@ -390,6 +381,7 @@
             <!-- Keep ground-truth odometry for evaluation without competing with BIEVR-LIO TF. -->
             <tf_topic>/ground_truth_tf</tf_topic>
             <dimensions>3</dimensions>
+            <odom_publish_frequency>200</odom_publish_frequency>
         </plugin>
     </gazebo>
 </robot>
