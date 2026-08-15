@@ -297,7 +297,7 @@
     <gazebo reference="imu_link">
         <sensor name="imu" type="imu">
             <update_rate>200.0</update_rate>
-            <topic>/livox/imu</topic>
+            <topic>/livox/imu_raw</topic>
             <gz_frame_id>imu_link</gz_frame_id>
         </sensor>
     </gazebo>

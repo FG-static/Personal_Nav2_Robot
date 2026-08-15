@@ -26,6 +26,7 @@ find_package(gz-plugin2 REQUIRED
 
 add_executable(robot_driver src/robot_driver.cpp)
 add_executable(odom_evaluator src/odom_evaluator.cpp)
+add_executable(gazebo_imu_adapter src/gazebo_imu_adapter.cpp)
 add_library(my_nav2_robot_mid360_gz_plugin SHARED src/mid360_gz_plugin.cpp)
 
 ament_target_dependencies(robot_driver
@@ -44,6 +45,18 @@ ament_target_dependencies(odom_evaluator
     tf2_ros
     tf2_eigen
     Sophus
+)
+
+target_include_directories(gazebo_imu_adapter PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(gazebo_imu_adapter
+    rclcpp
+    geometry_msgs
+    sensor_msgs
+    nav_msgs
 )
 
 target_include_directories(my_nav2_robot_mid360_gz_plugin PUBLIC
@@ -65,6 +78,7 @@ target_link_libraries(my_nav2_robot_mid360_gz_plugin
 install(TARGETS
   robot_driver
   odom_evaluator
+  gazebo_imu_adapter
   DESTINATION lib/${PROJECT_NAME}
 )
 
