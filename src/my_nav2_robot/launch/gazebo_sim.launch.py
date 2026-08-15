@@ -5,7 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -15,12 +15,30 @@ def generate_launch_description():
     xacro_file = os.path.join(pkg_share, 'urdf', 'robot.urdf.xacro')
     map1_obstacles_file = os.path.join(
         pkg_share, 'models', 'map1_obstacles', 'model.sdf')
+    culvert_file = os.path.join(pkg_share, 'models', 'culvert.sdf')
     robot_description = Command(['xacro ', xacro_file])
 
+    # 选择 Gazebo 中要生成的静态场景：
+    #   scene:=culvert -> 4m 宽、2m 高、10m 长的涵洞两侧墙（不封底）
+    #   scene:=map1    -> 原来的 map1 6 个障碍物
+    scene = LaunchConfiguration('scene', default='culvert')
+    spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
+    spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
+
+    scene_arg = DeclareLaunchArgument(
+        'scene',
+        default_value='culvert',
+        description='Static scene to spawn: culvert or map1'
+    )
+    spawn_culvert_arg = DeclareLaunchArgument(
+        'spawn_culvert',
+        default_value='true',
+        description='Spawn the culvert walls when scene is culvert'
+    )
     spawn_map1_obstacles_arg = DeclareLaunchArgument(
         'spawn_map1_obstacles',
         default_value='true',
-        description='Spawn collision geometry corresponding to maps/map1.pgm'
+        description='Spawn map1 obstacles when scene is map1'
     )
 
     node_robot_state_publisher = Node(
@@ -45,8 +63,24 @@ def generate_launch_description():
             '-topic', 'robot_description',
             '-name', 'my_cool_robot',
             '-allow_renaming', 'true',
+            # 地图 bounds 以 (0, 0) 为中心，所以机器人也固定生成在地图中心。
+            '-x', '0.0',
+            '-y', '0.0',
+            '-z', '0.0',
+            '-Y', '0.0',
         ],
         output='screen'
+    )
+
+    spawn_culvert_node = Node(
+        package='ros_gz_sim',
+        executable='create',
+        arguments=['-world', 'sensors', '-file', culvert_file],
+        output='screen',
+        condition=IfCondition(PythonExpression([
+            "'", scene, "' == 'culvert' and '",
+            spawn_culvert, "' == 'true'"
+        ]))
     )
 
     spawn_map1_obstacles = Node(
@@ -54,7 +88,10 @@ def generate_launch_description():
         executable='create',
         arguments=['-world', 'sensors', '-file', map1_obstacles_file],
         output='screen',
-        condition=IfCondition(LaunchConfiguration('spawn_map1_obstacles'))
+        condition=IfCondition(PythonExpression([
+            "'", scene, "' == 'map1' and '",
+            spawn_map1_obstacles, "' == 'true'"
+        ]))
     )
 
     bridge = Node(
@@ -92,9 +129,12 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        scene_arg,
+        spawn_culvert_arg,
         spawn_map1_obstacles_arg,
         gazebo,
         spawn_entity,
+        spawn_culvert_node,
         spawn_map1_obstacles,
         bridge,
         simulated_imu,

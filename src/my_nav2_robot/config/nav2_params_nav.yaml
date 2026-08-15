@@ -1,6 +1,6 @@
 amcl:
   ros__parameters:
-    initial_pose: [50.0, 50.0, 0.0]
+    initial_pose: [0.0, 0.0, 0.0]
     use_sim_time: True
     alpha1: 0.2
     alpha2: 0.2

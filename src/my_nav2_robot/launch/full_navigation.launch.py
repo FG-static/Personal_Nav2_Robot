@@ -23,7 +23,18 @@ def generate_launch_description():
 
     # 部分变量定义
     use_sim_time = LaunchConfiguration('use_sim_time', default = 'true')
-    map_yaml_file = LaunchConfiguration('map', default=os.path.join(pkg_project_bringup, 'maps', 'map1.yaml'))
+
+    # 静态场景选择，与 gazebo_sim.launch.py 的 scene 参数保持一致。
+    # 默认使用涵洞场景；地图默认为 maps/<scene>.yaml，可用 map:= 显式覆盖。
+    scene = LaunchConfiguration('scene', default='culvert')
+    spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
+    spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
+    map_override = LaunchConfiguration('map', default='')
+    map_yaml_file = PythonExpression([
+        "'", os.path.join(pkg_project_bringup, 'maps'), '/', scene, ".yaml' if '",
+        map_override, "' == '' else '",
+        map_override, "'"
+    ])
 
     # gz找模型路径
     set_gz_resource_path = SetEnvironmentVariable(
@@ -50,7 +61,10 @@ def generate_launch_description():
         condition=IfCondition(slam_mode),
         launch_arguments={
             'nav2_params': nav2_params_slam,
-            'use_sim_time': use_sim_time
+            'use_sim_time': use_sim_time,
+            'scene': scene,
+            'spawn_culvert': spawn_culvert,
+            'spawn_map1_obstacles': spawn_map1_obstacles
         }.items()
     )
     gazebo_sim_nav = IncludeLaunchDescription(
@@ -60,7 +74,10 @@ def generate_launch_description():
         condition=UnlessCondition(slam_mode),
         launch_arguments={
             'nav2_params': nav2_params_nav,
-            'use_sim_time': use_sim_time
+            'use_sim_time': use_sim_time,
+            'scene': scene,
+            'spawn_culvert': spawn_culvert,
+            'spawn_map1_obstacles': spawn_map1_obstacles
         }.items()
     )
 
@@ -80,8 +97,7 @@ def generate_launch_description():
     ])
     '''
     dynamic_map_path = PythonExpression([
-        "'", '', "' if ", 
-        slam_mode, " == 'True' else '",
+        "'' if '", slam_mode, "' == 'True' else '",
         map_yaml_file, "'"
     ])
     nav2_bringup_launch_slam = IncludeLaunchDescription(
@@ -120,6 +136,22 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('slam', default_value='False', description='Whether to run SLAM'),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'scene',
+            default_value='culvert',
+            description='Static scene and map name: culvert or map1'),
+        DeclareLaunchArgument(
+            'spawn_culvert',
+            default_value='true',
+            description='Spawn the culvert walls when scene is culvert'),
+        DeclareLaunchArgument(
+            'spawn_map1_obstacles',
+            default_value='true',
+            description='Spawn map1 obstacles when scene is map1'),
+        DeclareLaunchArgument(
+            'map',
+            default_value='',
+            description='Explicit map YAML path; empty uses maps/<scene>.yaml'),
         gazebo_sim_slam,
         gazebo_sim_nav,
         static_tf_node,

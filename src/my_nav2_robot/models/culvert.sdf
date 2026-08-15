@@ -1,0 +1,155 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+    <model name="culvert">
+        <static>true</static>
+        <link name="culvert_walls_link">
+            <!-- 左侧墙：长 10m（沿 Y），高 2m（沿 Z），厚 0.2m（沿 X） -->
+            <collision name="left_wall_collision">
+                <pose>-2.1 0 1.0 0 0 0</pose>
+                <geometry>
+                    <box><size>0.2 10.0 2.0</size></box>
+                </geometry>
+            </collision>
+            <visual name="left_wall_visual">
+                <pose>-2.1 0 1.0 0 0 0</pose>
+                <geometry>
+                    <box><size>0.2 10.0 2.0</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.35 0.35 0.35 1</ambient>
+                    <diffuse>0.65 0.65 0.65 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 右侧墙：与左侧对称，中间净宽 4m -->
+            <collision name="right_wall_collision">
+                <pose>2.1 0 1.0 0 0 0</pose>
+                <geometry>
+                    <box><size>0.2 10.0 2.0</size></box>
+                </geometry>
+            </collision>
+            <visual name="right_wall_visual">
+                <pose>2.1 0 1.0 0 0 0</pose>
+                <geometry>
+                    <box><size>0.2 10.0 2.0</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.35 0.35 0.35 1</ambient>
+                    <diffuse>0.65 0.65 0.65 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- ================= 墙体特征物 ================= -->
+            <!-- 这些小块/圆柱大部分埋在墙里，只向通道内突出约 0.08~0.10m， -->
+            <!-- 用于给 2D 激光和 3D 点云提供可辨识的几何特征，避免两面长墙过于光滑。 -->
+
+            <!-- 左侧特征 1：盒状凸起，y=-3.5m，向通道内突出 0.10m -->
+            <collision name="left_feature_box_1_collision">
+                <pose>-2.05 -3.5 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.40 0.25</size></box>
+                </geometry>
+            </collision>
+            <visual name="left_feature_box_1_visual">
+                <pose>-2.05 -3.5 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.40 0.25</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.30 0.35 1</ambient>
+                    <diffuse>0.60 0.60 0.75 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 左侧特征 2：竖圆柱，y=0.2m，半径 0.08m，向通道内突出 0.08m -->
+            <collision name="left_feature_cylinder_2_collision">
+                <pose>-2.0 0.2 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+            </collision>
+            <visual name="left_feature_cylinder_2_visual">
+                <pose>-2.0 0.2 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+                <material>
+                    <ambient>0.35 0.30 0.30 1</ambient>
+                    <diffuse>0.75 0.60 0.60 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 左侧特征 3：盒状凸起，y=3.7m，向通道内突出 0.10m -->
+            <collision name="left_feature_box_3_collision">
+                <pose>-2.05 3.7 0.30 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.55 0.35</size></box>
+                </geometry>
+            </collision>
+            <visual name="left_feature_box_3_visual">
+                <pose>-2.05 3.7 0.30 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.55 0.35</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.30 0.35 1</ambient>
+                    <diffuse>0.60 0.60 0.75 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 右侧特征 1：盒状凸起，y=-4.2m，向通道内突出 0.10m -->
+            <collision name="right_feature_box_1_collision">
+                <pose>2.05 -4.2 0.30 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.55 0.35</size></box>
+                </geometry>
+            </collision>
+            <visual name="right_feature_box_1_visual">
+                <pose>2.05 -4.2 0.30 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.55 0.35</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.35 0.35 0.30 1</ambient>
+                    <diffuse>0.75 0.75 0.60 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 右侧特征 2：盒状凸起，y=-0.5m，向通道内突出 0.10m -->
+            <collision name="right_feature_box_2_collision">
+                <pose>2.05 -0.5 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.40 0.25</size></box>
+                </geometry>
+            </collision>
+            <visual name="right_feature_box_2_visual">
+                <pose>2.05 -0.5 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.30 0.40 0.25</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.35 0.35 0.30 1</ambient>
+                    <diffuse>0.75 0.75 0.60 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 右侧特征 3：竖圆柱，y=2.9m，半径 0.08m，向通道内突出 0.08m -->
+            <collision name="right_feature_cylinder_3_collision">
+                <pose>2.0 2.9 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+            </collision>
+            <visual name="right_feature_cylinder_3_visual">
+                <pose>2.0 2.9 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.35 0.30 1</ambient>
+                    <diffuse>0.60 0.75 0.60 1</diffuse>
+                </material>
+            </visual>
+        </link>
+    </model>
+</sdf>
