@@ -88,6 +88,10 @@ install(TARGETS my_nav2_robot_mid360_gz_plugin
   RUNTIME DESTINATION bin
 )
 
+install(PROGRAMS scripts/generate_truth_map.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY include/
   DESTINATION include
 )
