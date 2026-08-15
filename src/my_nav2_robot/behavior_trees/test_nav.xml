@@ -12,9 +12,9 @@
               <!-- planner_id: AStar | RRTStar | HybridAStar -->
               <ComputePathToPose goal="{goal}"
                                  path="{raw_path}"
-                                 planner_id="HybridAStar"/>
+                                 planner_id="AStar"/>
               <!-- smoother_id: simple_smoother | esdf_g2o_smoother -->
-              <SmoothPath smoother_id="esdf_g2o_smoother"
+              <SmoothPath smoother_id="simple_smoother"
                           unsmoothed_path="{raw_path}"
                           smoothed_path="{candidate_path}"/>
             </Sequence>
@@ -28,7 +28,7 @@
                           replan_event_topic="trajectory_generation/replan_event"/>
         <!-- controller_id: FollowPath (mecanum TEB) | MPC | DWA -->
         <FollowPath path="{path}"
-                    controller_id="FollowPath"/>
+                    controller_id="MPC"/>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>

@@ -1,6 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from nav2_common.launch import RewrittenYaml
 from launch.actions import SetEnvironmentVariable
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -30,6 +31,21 @@ def generate_launch_description():
     spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
     map_override = LaunchConfiguration('map', default='')
+
+    # AMCL 初始位姿跟随机器人出生点：
+    #   culvert -> 左侧入口 x=-5.8
+    #   map1    -> 地图中心 (0, 0)
+    amcl_initial_pose = PythonExpression([
+        "'[-5.8, 0.0, 0.0]' if '",
+        scene, "' == 'culvert' else '[0.0, 0.0, 0.0]'"
+    ])
+    nav_params_with_pose = RewrittenYaml(
+        source_file=nav2_params_nav,
+        param_rewrites={
+            'amcl.ros__parameters.initial_pose': amcl_initial_pose,
+        },
+        convert_types=True,
+    )
     map_yaml_file = PythonExpression([
         "'", os.path.join(pkg_project_bringup, 'maps'), '/', scene, ".yaml' if '",
         map_override, "' == '' else '",
@@ -119,7 +135,7 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'map': dynamic_map_path,
-            'params_file': nav2_params_nav,
+            'params_file': nav_params_with_pose,
         }.items()
     )
 

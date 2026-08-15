@@ -56,6 +56,13 @@ def generate_launch_description():
             }.items(),
     )
 
+    # 机器人初始位置：
+    #   culvert -> 左侧入口处（涵洞沿 X 轴，左端 x=-6.0；车身略向内放 0.2m）
+    #   map1    -> 地图中心
+    robot_spawn_x = PythonExpression([
+        "'-5.8' if '", scene, "' == 'culvert' else '0.0'"
+    ])
+
     spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
@@ -63,8 +70,7 @@ def generate_launch_description():
             '-topic', 'robot_description',
             '-name', 'my_cool_robot',
             '-allow_renaming', 'true',
-            # 地图 bounds 以 (0, 0) 为中心，所以机器人也固定生成在地图中心。
-            '-x', '0.0',
+            '-x', robot_spawn_x,
             '-y', '0.0',
             '-z', '0.0',
             '-Y', '0.0',
