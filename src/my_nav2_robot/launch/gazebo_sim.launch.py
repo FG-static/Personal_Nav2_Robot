@@ -23,13 +23,22 @@ def generate_launch_description():
     #   scene:=map1    -> 原来的 map1 6 个障碍物
     scene = LaunchConfiguration('scene', default='culvert')
     slam = LaunchConfiguration('slam', default='False')
+    use_gazebo_odom_tf = LaunchConfiguration('use_gazebo_odom_tf', default='false')
     spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
 
     slam_arg = DeclareLaunchArgument(
         'slam',
         default_value='False',
-        description='Whether to bridge Gazebo ground-truth TF for slam_toolbox'
+        description='Whether to enable SLAM mode'
+    )
+    use_gazebo_odom_tf_arg = DeclareLaunchArgument(
+        'use_gazebo_odom_tf',
+        default_value='false',
+        description=(
+            'Publish Gazebo ground-truth odom TF. Keep false when an external '
+            'odometry source such as BIEVR-LIO publishes odom -> base_footprint.'
+        )
     )
     scene_arg = DeclareLaunchArgument(
         'scene',
@@ -125,15 +134,20 @@ def generate_launch_description():
         output='screen'
     )
 
-    # SLAM 模式专用：把 Gazebo OdometryPublisher 的 gz /tf 桥接成 ROS /tf。
-    # slam_toolbox 不订阅 odom topic，它必须通过 TF 拿 odom -> base_footprint。
+    # Optional fallback: bridge Gazebo's ground-truth odom TF into ROS.
+    # Do not enable this when BIEVR-LIO is running, because both sources would
+    # publish the same dynamic odom -> base_footprint transform.
+    gazebo_odom_tf_condition = PythonExpression([
+        "'True' if '", slam, "' in ('true', 'True') and '",
+        use_gazebo_odom_tf, "' in ('true', 'True') else 'False'"
+    ])
     tf_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=['/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V'],
         parameters=[{'use_sim_time': True}],
         output='screen',
-        condition=IfCondition(slam)
+        condition=IfCondition(gazebo_odom_tf_condition)
     )
 
     simulated_imu = Node(
@@ -153,6 +167,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         slam_arg,
+        use_gazebo_odom_tf_arg,
         scene_arg,
         spawn_culvert_arg,
         spawn_map1_obstacles_arg,

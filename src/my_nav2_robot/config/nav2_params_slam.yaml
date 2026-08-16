@@ -70,6 +70,9 @@ slam_toolbox:
 
     debug_logging: false
     throttle_scans: 1
+    # /scan is 50 Hz, while BIEVR-LIO publishes delayed lidar-time odom TF.
+    # Keep enough scans pending until the corresponding TF enters the buffer.
+    scan_queue_size: 20
     # 不为 0 时才会发布 map -> odom
     transform_publish_period: 0.02
     map_update_interval: 5.0
@@ -259,6 +262,7 @@ controller_server:
       alpha: 2.0
       beta: 1.5
       gamma: 1.0
+      unknown_cost_weight: 1.0
       lookahead_dist: 0.8
       max_v: 0.5
       max_w: 1.5

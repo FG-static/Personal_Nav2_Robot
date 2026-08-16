@@ -18,7 +18,7 @@ namespace my_nav2_controller {
         const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent,
         std::string name, std::shared_ptr<tf2_ros::Buffer> tf,
         std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) {
-        
+
         node_ = parent;
         auto node = node_.lock();
         tf_ = tf;
@@ -26,7 +26,7 @@ namespace my_nav2_controller {
         costmap_ros_ = costmap_ros;
         logger_ = node->get_logger();
         clock_ = node->get_clock();
-        
+
         declare_parameter_if_not_declared(
             node, plugin_name_ + ".alpha", rclcpp::ParameterValue(2.0)
         );
@@ -35,6 +35,9 @@ namespace my_nav2_controller {
         );
         declare_parameter_if_not_declared(
             node, plugin_name_ + ".gamma", rclcpp::ParameterValue(1.0)
+        );
+        declare_parameter_if_not_declared(
+            node, plugin_name_ + ".unknown_cost_weight", rclcpp::ParameterValue(1.0)
         );
         declare_parameter_if_not_declared(
             node, plugin_name_ + ".lookahead_dist", rclcpp::ParameterValue(0.8)
@@ -62,6 +65,7 @@ namespace my_nav2_controller {
         node->get_parameter(plugin_name_ + ".alpha", alpha);
         node->get_parameter(plugin_name_ + ".beta", beta);
         node->get_parameter(plugin_name_ + ".gamma", gamma);
+        node->get_parameter(plugin_name_ + ".unknown_cost_weight", unknown_cost_weight);
         node->get_parameter(plugin_name_ + ".lookahead_dist", lookahead_dist);
         node->get_parameter(plugin_name_ + ".max_v", max_v);
         node->get_parameter(plugin_name_ + ".max_w", max_w);
@@ -75,7 +79,7 @@ namespace my_nav2_controller {
 
         RCLCPP_INFO(logger_, "自定义DWA控制器配置完成");
     }
-     
+
     void MyDWAController::setPlan(const nav_msgs::msg::Path &path) {
 
         global_plan_ = path;
@@ -148,7 +152,9 @@ namespace my_nav2_controller {
 
                 double x = 0.0, y = 0.0, alp = r_yaw;
                 bool collided = false;
-                double min_dist_to_path = 1e9;
+                double min_dist_to_path = 1.0;
+                int costmap_sample_count = 0;
+                int unknown_sample_count = 0;
 
                 for (double t = 0; t < sim_time_; t += 0.2) {
 
@@ -159,17 +165,22 @@ namespace my_nav2_controller {
                     // 地图内判断
                     if (costmap_ros_->getCostmap()->worldToMap(x + r_x, y + r_y, mx, my)) {
 
-                        // 获取代价
-                        unsigned char cost = costmap->getCost(mx, my);
-                        if (cost >= 250) { // 撞墙了
+                        ++costmap_sample_count;
+                        const unsigned char cost = costmap->getCost(mx, my);
+                        if (cost == nav2_costmap_2d::NO_INFORMATION) {
+
+                            ++ unknown_sample_count;
+                            continue;
+                        }
+                        if (cost >= 250) { // 已知高代价区域仍视为碰撞
 
                             collided = true;
                             break;
                         }
-                        double dist_score_temp = (255.0 - cost) / 255.0; // 归一化
+                        const double dist_score_temp = (255.0 - cost) / 255.0;
                         if (dist_score_temp < min_dist_to_path) {
 
-                            // 代价越小，距离越大
+                            // 代价越小，距离得分越高。
                             min_dist_to_path = dist_score_temp;
                         }
                     }
@@ -180,19 +191,26 @@ namespace my_nav2_controller {
                 // Heading
                 double diff_angle = std::abs(cal_diff_angle(alp, target_yaw)),
                     heading_score = (M_PI - diff_angle) / M_PI;
-                
+
                 // Distance
-                double distance_score = min_dist_to_path;
+                const double distance_score = min_dist_to_path;
+
+                // Unknown-space penalty. Unknown cells are traversable, but trajectories
+                // spending more time in them receive a lower score.
+                const double unknown_ratio = costmap_sample_count > 0 ?
+                    static_cast<double>(unknown_sample_count) /
+                    static_cast<double>(costmap_sample_count) : 0.0;
+                const double unknown_penalty = unknown_cost_weight * unknown_ratio;
 
                 // Velocity
-                double velocity_score = v / max_v;
-                double score = alpha * heading_score +
-                               beta * distance_score +
-                               gamma * velocity_score;
+                const double velocity_score = v / max_v;
+                const double score = alpha * heading_score +
+                    beta * distance_score +
+                    gamma * velocity_score - unknown_penalty;
                 if (score > best_path.score) best_path = {v, w, score, 0.0, 0.0};
             }
         }
-        
+
         geometry_msgs::msg::TwistStamped cmd_vel;
         cmd_vel.header.stamp = clock_->now();
         cmd_vel.header.frame_id = "base_link";
@@ -205,7 +223,7 @@ namespace my_nav2_controller {
     void MyDWAController::deactivate() { RCLCPP_INFO(logger_, "插件已停用"); }
     void MyDWAController::cleanup() { RCLCPP_INFO(logger_, "插件已清理"); }
     void MyDWAController::setSpeedLimit(const double & speed_limit, const bool & percentage) {
-        
+
         (void)speed_limit;
         (void)percentage;
         RCLCPP_INFO(logger_, "收到限速指令，当前插件尚未实现具体的限速逻辑");

@@ -73,6 +73,7 @@ namespace my_nav2_controller {
 
         // DWA参数
         double alpha, beta, gamma; // heading distance velocity分权重
+        double unknown_cost_weight; // 未知区域占比惩罚权重
         double lookahead_dist; // 诱饵点
         double max_v; // 最大速度
         double max_w;

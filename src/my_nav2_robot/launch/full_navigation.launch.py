@@ -10,13 +10,17 @@ from launch.substitutions import PythonExpression, LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 
 def generate_launch_description():
-    
+
     # 包地址
     pkg_project_bringup = get_package_share_directory('my_nav2_robot')
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
 
     # 地图路径
     slam_mode = LaunchConfiguration('slam', default='False')
+
+    # 使用 BIEVR-LIO 等外部里程计时必须关闭 Gazebo 的动态 odom TF，
+    # 避免两个节点同时发布 odom -> base_footprint。
+    use_gazebo_odom_tf = LaunchConfiguration('use_gazebo_odom_tf', default='false')
     # nav2_bringup 内部用 PythonExpression 直接拼接 slam 字符串，
     # 所以这里统一转成 Python 布尔字面量，兼容 slam:=true 和 slam:=True。
     slam_for_bringup = PythonExpression([
@@ -70,9 +74,9 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_map_to_odom',
-        arguments=['--x', '0', '--y', '0', '--z', '0', 
-                '--yaw', '0', '--pitch', '0', '--roll', '0', 
-                '--frame-id', 'map', 
+        arguments=['--x', '0', '--y', '0', '--z', '0',
+                '--yaw', '0', '--pitch', '0', '--roll', '0',
+                '--frame-id', 'map',
                 '--child-frame-id', 'odom'],
         condition=UnlessCondition(slam_mode)
     )
@@ -87,6 +91,7 @@ def generate_launch_description():
             'nav2_params': nav2_params_slam,
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
+            'use_gazebo_odom_tf': use_gazebo_odom_tf,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles
@@ -101,6 +106,7 @@ def generate_launch_description():
             'nav2_params': nav2_params_nav,
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
+            'use_gazebo_odom_tf': use_gazebo_odom_tf,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles
@@ -166,6 +172,14 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('slam', default_value='False', description='Whether to run SLAM'),
+        DeclareLaunchArgument(
+            'use_gazebo_odom_tf',
+            default_value='false',
+            description=(
+                'Use Gazebo ground-truth odom TF instead of an external odometry '
+                'source such as BIEVR-LIO.'
+            )
+        ),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument(
             'scene',
