@@ -107,6 +107,7 @@ namespace my_bspline_smoother {
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_overlap_threshold", rclcpp::ParameterValue(0.8));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_collision_check_resolution", rclcpp::ParameterValue(0.03));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".visualize_corridor_boxes", rclcpp::ParameterValue(true));
+        nav2_util::declare_parameter_if_not_declared(node_, name + ".allow_unknown", rclcpp::ParameterValue(true));
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_marker_z", rclcpp::ParameterValue(0.02));
         nav2_util::declare_parameter_if_not_declared(
             node_, name + ".max_overshoot_constraints_per_iter", rclcpp::ParameterValue(20));
@@ -126,6 +127,7 @@ namespace my_bspline_smoother {
         node_->get_parameter(name + ".corridor_overlap_threshold", corridor_overlap_threshold_);
         node_->get_parameter(name + ".corridor_collision_check_resolution", corridor_collision_check_resolution_);
         node_->get_parameter(name + ".visualize_corridor_boxes", visualize_corridor_boxes_);
+        node_->get_parameter(name + ".allow_unknown", allow_unknown_);
         node_->get_parameter(name + ".corridor_marker_z", corridor_marker_z_);
         node_->get_parameter(name + ".max_overshoot_constraints_per_iter", max_overshoot_constraints_per_iter_);
 
@@ -941,7 +943,7 @@ namespace my_bspline_smoother {
 
         const unsigned char cost = costmap->getCost(umx, umy);
         if (cost == nav2_costmap_2d::NO_INFORMATION)
-            return false;
+            return allow_unknown_;
 
         return cost < corridor_lethal_cost_threshold_;
     }

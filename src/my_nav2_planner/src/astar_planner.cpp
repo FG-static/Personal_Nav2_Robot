@@ -20,6 +20,9 @@ namespace my_nav2_planner {
         name_ = name;
         costmap_ = costmap_ros->getCostmap();
         global_frame_ = costmap_ros->getGlobalFrameID();
+        replan_event_pub_ = node_->create_publisher<rm_interfaces::msg::ReplanEvent>(
+            "trajectory_generation/replan_event",
+            rclcpp::QoS(1).reliable().transient_local());
 
         nav2_util::declare_parameter_if_not_declared(
             node_, name_ + ".unknown_cost", rclcpp::ParameterValue(5.0));
@@ -211,6 +214,23 @@ namespace my_nav2_planner {
 
             global_path.poses.clear();
             RCLCPP_WARN(node_->get_logger(), "A* failed to find a path from start to goal");
+        }
+
+        if (found_path && !global_path.poses.empty() && replan_event_pub_) {
+            rm_interfaces::msg::ReplanEvent event;
+            event.header.stamp = node_->now();
+            event.header.frame_id = global_frame_;
+            event.need_replan = true;
+            event.event_id = ++replan_event_id_;
+            event.reason = rm_interfaces::msg::ReplanEvent::FORCED;
+            event.candidate_path_stamp = global_path.header.stamp;
+            event.goal = goal;
+            replan_event_pub_->publish(event);
+
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "Published A* replan event id=%lu",
+                static_cast<unsigned long>(event.event_id));
         }
 
         logMetrics(

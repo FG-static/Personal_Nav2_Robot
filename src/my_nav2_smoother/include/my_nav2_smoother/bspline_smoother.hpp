@@ -274,6 +274,7 @@ namespace my_bspline_smoother {
             corridor_marker_z_ = 0.02;
         int max_overshoot_constraints_per_iter_ = 20;
         bool visualize_corridor_boxes_ = true;
+        bool allow_unknown_ = true;
         unsigned char corridor_lethal_cost_threshold_ =
             nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
         BSplineSolveStats last_solve_stats_;

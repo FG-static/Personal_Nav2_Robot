@@ -28,7 +28,7 @@
                           replan_event_topic="trajectory_generation/replan_event"/>
         <!-- controller_id: FollowPath (mecanum TEB) | MPC | MPPI | DWA -->
         <FollowPath path="{path}"
-                    controller_id="MPPI"/>
+                    controller_id="FollowPath"/>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>

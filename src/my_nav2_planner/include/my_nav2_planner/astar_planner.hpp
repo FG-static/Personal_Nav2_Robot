@@ -1,6 +1,7 @@
 #ifndef MY_NAV2_PLANNER__ASTAR_PLANNER
 #define MY_NAV2_PLANNER__ASTAR_PLANNER
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
 #include "nav2_util/lifecycle_node.hpp"
 #include "nav2_util/node_utils.hpp"
+#include "rm_interfaces/msg/replan_event.hpp"
 
 namespace my_nav2_planner {
 
@@ -43,6 +45,8 @@ namespace my_nav2_planner {
         nav2_costmap_2d::Costmap2D *costmap_;
         std::string global_frame_, name_;
         double unknown_cost_, interpolation_resolution_;
+        rclcpp::Publisher<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_pub_;
+        std::uint64_t replan_event_id_ = 0;
     };
 } // namespace my_nav2_planner
 
