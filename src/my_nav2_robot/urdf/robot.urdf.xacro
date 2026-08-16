@@ -378,8 +378,10 @@
             <odom_topic>/ground_truth</odom_topic>  <!-- Ground truth is retained only for evaluation. -->
             <odom_frame>odom</odom_frame>
             <robot_base_frame>base_footprint</robot_base_frame>
-            <!-- Keep ground-truth odometry for evaluation without competing with BIEVR-LIO TF. -->
-            <tf_topic>/ground_truth_tf</tf_topic>
+            <!-- SLAM 模式下由 ros_gz_bridge 将 gz /tf 桥接到 ROS /tf， -->
+            <!-- 给 slam_toolbox 提供 odom -> base_footprint。 -->
+            <!-- 导航模式下不桥接该 TF，避免和外部 BIEVR-LIO 冲突。 -->
+            <tf_topic>/tf</tf_topic>
             <dimensions>3</dimensions>
             <odom_publish_frequency>200</odom_publish_frequency>
         </plugin>

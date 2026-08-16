@@ -22,9 +22,15 @@ def generate_launch_description():
     #   scene:=culvert -> 4m 宽、2m 高、10m 长的涵洞两侧墙（不封底）
     #   scene:=map1    -> 原来的 map1 6 个障碍物
     scene = LaunchConfiguration('scene', default='culvert')
+    slam = LaunchConfiguration('slam', default='False')
     spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
 
+    slam_arg = DeclareLaunchArgument(
+        'slam',
+        default_value='False',
+        description='Whether to bridge Gazebo ground-truth TF for slam_toolbox'
+    )
     scene_arg = DeclareLaunchArgument(
         'scene',
         default_value='culvert',
@@ -119,6 +125,17 @@ def generate_launch_description():
         output='screen'
     )
 
+    # SLAM 模式专用：把 Gazebo OdometryPublisher 的 gz /tf 桥接成 ROS /tf。
+    # slam_toolbox 不订阅 odom topic，它必须通过 TF 拿 odom -> base_footprint。
+    tf_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V'],
+        parameters=[{'use_sim_time': True}],
+        output='screen',
+        condition=IfCondition(slam)
+    )
+
     simulated_imu = Node(
         package='my_nav2_robot',
         executable='simulated_imu_publisher',
@@ -135,6 +152,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        slam_arg,
         scene_arg,
         spawn_culvert_arg,
         spawn_map1_obstacles_arg,
@@ -143,6 +161,7 @@ def generate_launch_description():
         spawn_culvert_node,
         spawn_map1_obstacles,
         bridge,
+        tf_bridge,
         simulated_imu,
         node_robot_state_publisher,
     ])

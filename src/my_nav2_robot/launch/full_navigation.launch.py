@@ -14,10 +14,14 @@ def generate_launch_description():
     # 包地址
     pkg_project_bringup = get_package_share_directory('my_nav2_robot')
     pkg_nav2_bringup = get_package_share_directory('nav2_bringup')
-    pkg_slam_toolbox = get_package_share_directory('slam_toolbox')
 
     # 地图路径
     slam_mode = LaunchConfiguration('slam', default='False')
+    # nav2_bringup 内部用 PythonExpression 直接拼接 slam 字符串，
+    # 所以这里统一转成 Python 布尔字面量，兼容 slam:=true 和 slam:=True。
+    slam_for_bringup = PythonExpression([
+        "'True' if '", slam_mode, "' in ('true', 'True') else 'False'"
+    ])
 
     nav2_params_slam = os.path.join(pkg_project_bringup, 'config', 'nav2_params_slam.yaml')
     nav2_params_nav = os.path.join(pkg_project_bringup, 'config', 'nav2_params_nav_diy.yaml')
@@ -59,6 +63,8 @@ def generate_launch_description():
     )
 
     # map->odom
+    # 导航模式使用外部 LIO，手动发布静态 map->odom；
+    # SLAM 模式下该 TF 由 slam_toolbox 发布，不能同时手动发布，否则会冲突。
     static_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -66,7 +72,8 @@ def generate_launch_description():
         arguments=['--x', '0', '--y', '0', '--z', '0', 
                 '--yaw', '0', '--pitch', '0', '--roll', '0', 
                 '--frame-id', 'map', 
-                '--child-frame-id', 'odom']
+                '--child-frame-id', 'odom'],
+        condition=UnlessCondition(slam_mode)
     )
 
     # gazebo_sim.launch.py
@@ -78,6 +85,7 @@ def generate_launch_description():
         launch_arguments={
             'nav2_params': nav2_params_slam,
             'use_sim_time': use_sim_time,
+            'slam': slam_for_bringup,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles
@@ -91,21 +99,15 @@ def generate_launch_description():
         launch_arguments={
             'nav2_params': nav2_params_nav,
             'use_sim_time': use_sim_time,
+            'slam': slam_for_bringup,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles
         }.items()
     )
 
-    # slam建图模式
-    slam_toolbox = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_slam_toolbox, 'launch', 'online_async_launch.py')
-        ),
-        condition=IfCondition(slam_mode),
-        launch_arguments={'use_sim_time': use_sim_time}.items()
-    )
-
+    # SLAM 功能由 nav2_bringup 的 slam_launch.py 统一启动，
+    # 这里不再单独启动 slam_toolbox，避免同时跑两套 SLAM。
     # bringup_launch.py
     '''
     dynamic_map_path = PythonExpression([ # nav下不加载地图
@@ -123,6 +125,7 @@ def generate_launch_description():
         condition=IfCondition(slam_mode),
         launch_arguments={
             'use_sim_time': use_sim_time,
+            'slam': slam_for_bringup,
             'map': dynamic_map_path,
             'params_file': nav2_params_slam,
         }.items()
@@ -134,6 +137,7 @@ def generate_launch_description():
         condition=UnlessCondition(slam_mode),
         launch_arguments={
             'use_sim_time': use_sim_time,
+            'slam': slam_for_bringup,
             'map': dynamic_map_path,
             'params_file': nav_params_with_pose,
         }.items()
@@ -171,7 +175,6 @@ def generate_launch_description():
         gazebo_sim_slam,
         gazebo_sim_nav,
         static_tf_node,
-        slam_toolbox,
         nav2_bringup_launch_slam,
         nav2_bringup_launch_nav,
         rviz_node
