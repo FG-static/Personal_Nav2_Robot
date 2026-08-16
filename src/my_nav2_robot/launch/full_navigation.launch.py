@@ -34,6 +34,7 @@ def generate_launch_description():
     scene = LaunchConfiguration('scene', default='culvert')
     spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
+    enable_tunnel_guidance = LaunchConfiguration('enable_tunnel_guidance', default='false')
     map_override = LaunchConfiguration('map', default='')
 
     # AMCL 初始位姿跟随机器人出生点：
@@ -143,6 +144,16 @@ def generate_launch_description():
         }.items()
     )
 
+    # 涵洞中心线估计节点：默认关闭，独立调试时可通过 launch 文件单独启动。
+    tunnel_guidance_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('my_tunnel_guidance'),
+                'launch', 'tunnel_guidance.launch.py')
+        ),
+        condition=IfCondition(enable_tunnel_guidance)
+    )
+
     rviz_config_path = os.path.join(pkg_project_bringup, 'config', 'nav2_config.rviz')
     rviz_node = Node(
         package='rviz2',
@@ -169,6 +180,10 @@ def generate_launch_description():
             default_value='true',
             description='Spawn map1 obstacles when scene is map1'),
         DeclareLaunchArgument(
+            'enable_tunnel_guidance',
+            default_value='false',
+            description='Start the tunnel centerline guidance node'),
+        DeclareLaunchArgument(
             'map',
             default_value='',
             description='Explicit map YAML path; empty uses maps/<scene>.yaml'),
@@ -177,5 +192,6 @@ def generate_launch_description():
         static_tf_node,
         nav2_bringup_launch_slam,
         nav2_bringup_launch_nav,
+        tunnel_guidance_launch,
         rviz_node
     ])

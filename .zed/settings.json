@@ -1,0 +1,13 @@
+{
+    "tab_size": 4,
+    "hard_tabs": false,
+    "lsp": {
+        "clangd": {
+            "binary": {
+                "arguments": [
+                    "--compile-commands-dir=/home/goose/nav2_test/build"
+                ]
+            }
+        }
+    }
+}

@@ -1,0 +1,35 @@
+tunnel_guidance:
+    ros__parameters:
+        use_sim_time: true
+        input_cloud_topic: /livox/lidar
+        estimation_frame: base_link
+        output_frame: odom
+
+        # ROI, all values are in base_link
+        min_forward_distance: 0.2
+        max_forward_distance: 8.0
+        max_backward_distance: 0.5
+        max_lateral_distance: 3.0
+        min_side_lateral_distance: 1.0
+        min_height: -0.5
+        max_height: 2.2
+        ground_max_z: 0.0
+        voxel_leaf_size: 0.05
+
+        # Plane fitting quality gates
+        min_ground_points: 100
+        min_wall_points: 100
+        plane_max_rmse: 0.08
+        min_tunnel_width: 2.5
+        max_tunnel_width: 5.0
+        min_direction_eigen_gap: 0.05
+
+        # Centerline output
+        centerline_length: 8.0
+        centerline_point_spacing: 0.2
+        lookahead_distance: 5.0
+
+        # Temporal stability
+        filter_new_measurement_weight: 0.2
+        valid_frame_count: 3
+        result_hold_time: 0.5
