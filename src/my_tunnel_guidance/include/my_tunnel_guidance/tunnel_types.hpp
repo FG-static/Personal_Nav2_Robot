@@ -37,6 +37,21 @@ struct CenterlineEstimate {
     bool valid = false;
 };
 
+// 在 odom 坐标系下维护的直涵洞墙体模型。
+// left_l/right_l 是沿 lateral 轴到 model.center 的横向坐标，
+// 初始标定后保持不变，后续只做慢更新。
+struct TunnelWallModel {
+
+    bool initialized = false;
+    Eigen::Vector3d tangent = Eigen::Vector3d::UnitX();
+    Eigen::Vector3d lateral = Eigen::Vector3d::UnitY();
+    Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
+    Eigen::Vector3d center = Eigen::Vector3d::Zero();
+    double left_l = 2.0;
+    double right_l = -2.0;
+    double width = 4.0;
+};
+
 }  // namespace my_tunnel_guidance
 
 #endif  // MY_TUNNEL_GUIDANCE__TUNNEL_TYPES_HPP_

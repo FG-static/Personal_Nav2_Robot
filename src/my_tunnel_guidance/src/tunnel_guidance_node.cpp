@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -37,6 +38,10 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     filter_alpha_ = declare_parameter("filter_new_measurement_weight", 0.2);
     valid_frame_count_ = declare_parameter("valid_frame_count", 3);
     result_hold_time_ = declare_parameter("result_hold_time", 0.5);
+    wall_band_ = declare_parameter("wall_band", 0.25);
+    wall_model_update_alpha_ = declare_parameter("wall_model_update_alpha", 0.1);
+    wall_position_jump_limit_ = declare_parameter("wall_position_jump_limit", 0.3);
+    init_required_frames_ = declare_parameter("init_required_frames", 3);
 
     geometry_params_.min_ground_points =
         declare_parameter("min_ground_points", 100);
@@ -66,6 +71,12 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         "~/markers", rclcpp::QoS(1));
     valid_pub_ = create_publisher<std_msgs::msg::Bool>("~/valid", rclcpp::QoS(1));
+    left_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+        "~/left_points", rclcpp::SensorDataQoS());
+    right_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+        "~/right_points", rclcpp::SensorDataQoS());
+    ground_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+        "~/ground_points", rclcpp::SensorDataQoS());
 
     RCLCPP_INFO(get_logger(), "Tunnel guidance node started");
 }
@@ -154,6 +165,42 @@ bool TunnelGuidanceNode::transformCloudToBase(
     return !points.empty();
 }
 
+void TunnelGuidanceNode::publishClassifiedPointClouds(
+    const rclcpp::Time & stamp,
+    const std::vector<Eigen::Vector3d> & left_points,
+    const std::vector<Eigen::Vector3d> & right_points,
+    const std::vector<Eigen::Vector3d> & ground_points
+) {
+
+    const auto toPointCloudMessage = [this, &stamp](
+        const std::vector<Eigen::Vector3d> & points) {
+
+        pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
+        pcl_cloud.points.reserve(points.size());
+        for (const Eigen::Vector3d & point : points) {
+
+            pcl_cloud.points.emplace_back(
+                static_cast<float>(point.x()),
+                static_cast<float>(point.y()),
+                static_cast<float>(point.z()));
+        }
+        pcl_cloud.width = static_cast<std::uint32_t>(pcl_cloud.points.size());
+        pcl_cloud.height = 1U;
+        pcl_cloud.is_dense = true;
+        pcl_cloud.header.frame_id = output_frame_;
+
+        sensor_msgs::msg::PointCloud2 message;
+        pcl::toROSMsg(pcl_cloud, message);
+        message.header.stamp = stamp;
+        message.header.frame_id = output_frame_;
+        return message;
+    };
+
+    left_points_pub_->publish(toPointCloudMessage(left_points));
+    right_points_pub_->publish(toPointCloudMessage(right_points));
+    ground_points_pub_->publish(toPointCloudMessage(ground_points));
+}
+
 /**
  * @brief 获取从估计坐标系到输出坐标系的变换，主要用于 publish
  * @param stamp 时间戳
@@ -181,6 +228,130 @@ bool TunnelGuidanceNode::getBaseToOutputTransform(
     }
 }
 
+/**
+ * @brief 将隧道帧从基坐标系转换到输出坐标系
+ * @param frame 输入的隧道帧
+ * @param base_to_output 基坐标系到输出坐标系的变换
+ * @return TunnelFrameEstimate 转换后的隧道帧
+ */
+TunnelFrameEstimate TunnelGuidanceNode::frameToOutputFrame(
+    const TunnelFrameEstimate & frame,
+    const Eigen::Isometry3d & base_to_output
+) const {
+
+    TunnelFrameEstimate output_frame = frame;
+    output_frame.center = base_to_output * frame.center;
+    output_frame.tangent = (base_to_output.linear() * frame.tangent).normalized();
+    output_frame.up = (base_to_output.linear() * frame.up).normalized();
+    output_frame.lateral = output_frame.up.cross(output_frame.tangent).normalized();
+    if (output_frame.lateral.dot(
+            base_to_output.linear() * Eigen::Vector3d::UnitY()) < 0.0) {
+
+        output_frame.lateral = -output_frame.lateral;
+    }
+    output_frame.tangent = output_frame.lateral.cross(output_frame.up).normalized();
+    return output_frame;
+}
+
+bool TunnelGuidanceNode::initializeWallModel(
+    const TunnelFrameEstimate & output_frame,
+    const Eigen::Isometry3d & base_to_output
+) {
+
+    (void)base_to_output;
+    if (!output_frame.valid || output_frame.width <= 0.0) {
+
+        return false;
+    }
+
+    wall_model_.initialized = true;
+    wall_model_.center = output_frame.center;
+    wall_model_.tangent = output_frame.tangent.normalized();
+    wall_model_.up = output_frame.up.normalized();
+    wall_model_.lateral = wall_model_.up.cross(wall_model_.tangent).normalized();
+    wall_model_.width = output_frame.width;
+    wall_model_.left_l = 0.5 * wall_model_.width;
+    wall_model_.right_l = -0.5 * wall_model_.width;
+
+    RCLCPP_INFO(
+        get_logger(),
+        "Wall model calibrated: width=%.2f center=(%.2f %.2f %.2f) tangent=(%.2f %.2f)",
+        wall_model_.width,
+        wall_model_.center.x(), wall_model_.center.y(), wall_model_.center.z(),
+        wall_model_.tangent.x(), wall_model_.tangent.y());
+    return true;
+}
+
+void TunnelGuidanceNode::classifyWithWallModel(
+    const std::vector<Eigen::Vector3d> & output_points,
+    std::vector<Eigen::Vector3d> & left_points,
+    std::vector<Eigen::Vector3d> & right_points,
+    std::vector<Eigen::Vector3d> & ground_points
+) const {
+
+    for (const auto & point : output_points) {
+
+        if (point.z() <= ground_max_z_) {
+
+            ground_points.push_back(point);
+            continue;
+        }
+
+        const double lateral_offset =
+            wall_model_.lateral.dot(point - wall_model_.center);
+        if (std::abs(lateral_offset - wall_model_.left_l) <= wall_band_) {
+
+            left_points.push_back(point);
+        } else if (std::abs(lateral_offset - wall_model_.right_l) <= wall_band_) {
+
+            right_points.push_back(point);
+        }
+    }
+}
+
+bool TunnelGuidanceNode::updateWallModel(
+    const TunnelFrameEstimate & output_frame
+) {
+
+    if (!output_frame.valid || !wall_model_.initialized) {
+
+        return false;
+    }
+
+    Eigen::Vector3d tangent = output_frame.tangent;
+    if (tangent.dot(wall_model_.tangent) < 0.0) {
+
+        tangent = -tangent;
+    }
+
+    const double center_offset =
+        wall_model_.lateral.dot(output_frame.center - wall_model_.center);
+    const double left_obs = center_offset + 0.5 * output_frame.width;
+    const double right_obs = center_offset - 0.5 * output_frame.width;
+
+    if (std::abs(left_obs - wall_model_.left_l) > wall_position_jump_limit_ ||
+        std::abs(right_obs - wall_model_.right_l) > wall_position_jump_limit_) {
+
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Wall observation jump too large, keep previous wall model");
+        return false;
+    }
+
+    const double alpha = std::clamp(wall_model_update_alpha_, 0.0, 1.0);
+    wall_model_.left_l += alpha * (left_obs - wall_model_.left_l);
+    wall_model_.right_l += alpha * (right_obs - wall_model_.right_l);
+    wall_model_.width = wall_model_.left_l - wall_model_.right_l;
+
+    wall_model_.tangent =
+        ((1.0 - alpha) * wall_model_.tangent + alpha * tangent).normalized();
+    wall_model_.up =
+        ((1.0 - alpha) * wall_model_.up + alpha * output_frame.up).normalized();
+    wall_model_.lateral =
+        wall_model_.up.cross(wall_model_.tangent).normalized();
+    return true;
+}
+
 void TunnelGuidanceNode::pointCloudCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg
 ) {
@@ -190,70 +361,141 @@ void TunnelGuidanceNode::pointCloudCallback(
         return;
 
     const rclcpp::Time stamp(cloud_msg->header.stamp);
+    Eigen::Isometry3d base_to_output = Eigen::Isometry3d::Identity();
+    if (!getBaseToOutputTransform(stamp, base_to_output)) {
+
+        return;
+    }
+
+    std::vector<Eigen::Vector3d> output_points;
+    output_points.reserve(base_points.size());
+    for (const auto & point : base_points) {
+
+        output_points.push_back(base_to_output * point);
+    }
+
     std::vector<Eigen::Vector3d> left_points, right_points, ground_points;
     left_points.reserve(base_points.size() / 4);
     right_points.reserve(base_points.size() / 4);
     ground_points.reserve(base_points.size() / 4);
 
-    // 按照点的高度将点云分为地面点、左点和右点
-    for (const auto & point : base_points) {
-
-        if (point.z() <= ground_max_z_) {
-
-            ground_points.push_back(point);
-        } else if (point.y() > min_side_lateral_distance_) {
-
-            left_points.push_back(point);
-        } else if (point.y() < -min_side_lateral_distance_) {
-
-            right_points.push_back(point);
-        }
-    }
-
-    const TunnelFrameEstimate frame =
-        estimator_.estimateFrame(left_points, right_points, ground_points);
+    TunnelFrameEstimate output_frame;
     const rclcpp::Time now = get_clock()->now();
 
-    if (!frame.valid) {
+    if (!wall_model_.initialized) {
 
-        if (has_last_result_ &&
-            (now - last_valid_time_).seconds() <= result_hold_time_
-        ) {
+        // 初始化阶段：仍使用 base_link 下的粗分区完成首次标定。
+        for (const auto & point : base_points) {
 
-            publishResults(stamp, last_centerline_, false);
+            if (point.z() <= ground_max_z_) {
+
+                ground_points.push_back(point);
+            } else if (point.y() > min_side_lateral_distance_) {
+
+                left_points.push_back(point);
+            } else if (point.y() < -min_side_lateral_distance_) {
+
+                right_points.push_back(point);
+            }
         }
-        return;
-    }
 
-    Eigen::Vector3d tangent = frame.tangent;
-    if (has_last_result_ && tangent.dot(filtered_tangent_) < 0.0) {
+        // 将点云转换到输出坐标系
+        const auto to_output = [&](const std::vector<Eigen::Vector3d> & points) {
 
-        tangent = -tangent;
-    }
+            std::vector<Eigen::Vector3d> converted;
+            converted.reserve(points.size());
+            for (const auto & point : points) {
 
-    if (!has_last_result_) {
+                converted.push_back(base_to_output * point);
+            }
+            return converted;
+        };
+        publishClassifiedPointClouds(
+            stamp,
+            to_output(left_points),
+            to_output(right_points),
+            to_output(ground_points)
+        );
 
-        filtered_tangent_ = tangent;
-        filtered_center_ = frame.center;
-        filtered_width_ = frame.width;
+        // 估计隧道帧
+        const TunnelFrameEstimate base_frame =
+            estimator_.estimateFrame(left_points, right_points, ground_points);
+        if (!base_frame.valid) {
+
+            calibration_valid_frames_ = 0;
+            if (has_last_result_ &&
+                (now - last_valid_time_).seconds() <= result_hold_time_
+            ) {
+
+                publishResults(stamp, last_centerline_, false);
+            }
+            return;
+        }
+
+        // 将隧道帧转换到输出坐标系
+        output_frame = frameToOutputFrame(base_frame, base_to_output);
+        calibration_valid_frames_++;
+
+        // 初始化墙模型
+        if (calibration_valid_frames_ >= init_required_frames_ &&
+            initializeWallModel(output_frame, base_to_output)) {
+
+            consecutive_valid_ = 0;
+        } else {
+
+            const CenterlineEstimate calibration_centerline =
+                estimator_.buildStraightCenterline(output_frame);
+            if (calibration_centerline.valid) {
+
+                publishResults(stamp, calibration_centerline, false);
+            }
+            return;
+        }
     } else {
 
-        filtered_tangent_ =
-            ((1.0 - filter_alpha_) * filtered_tangent_ + filter_alpha_ * tangent).normalized();
-        filtered_center_ =
-            (1.0 - filter_alpha_) * filtered_center_ + filter_alpha_ * frame.center;
-        filtered_width_ =
-            (1.0 - filter_alpha_) * filtered_width_ + filter_alpha_ * frame.width;
+        // 标定完成后，使用 odom 下的墙体模型分割点云。
+        classifyWithWallModel(
+            output_points, left_points, right_points, ground_points);
+        publishClassifiedPointClouds(
+            stamp, left_points, right_points, ground_points);
+
+        const TunnelFrameEstimate observed_frame =
+            estimator_.estimateFrame(left_points, right_points, ground_points);
+        if (!observed_frame.valid) {
+
+            consecutive_valid_ = 0;
+            if (has_last_result_ &&
+                (now - last_valid_time_).seconds() <= result_hold_time_
+            ) {
+
+                publishResults(stamp, last_centerline_, false);
+            }
+            return;
+        }
+
+        updateWallModel(observed_frame);
+
+        // 用墙体模型在机器人当前纵向位置生成中心线。
+        const Eigen::Vector3d robot_position = base_to_output.translation();
+        const double s_robot =
+            wall_model_.tangent.dot(robot_position - wall_model_.center);
+        const double center_lateral =
+            0.5 * (wall_model_.left_l + wall_model_.right_l);
+
+        output_frame.tangent = wall_model_.tangent;
+        output_frame.up = wall_model_.up;
+        output_frame.lateral = wall_model_.lateral;
+        output_frame.width = wall_model_.width;
+        output_frame.center =
+            wall_model_.center +
+            wall_model_.tangent * s_robot +
+            wall_model_.lateral * center_lateral;
+        output_frame.confidence = observed_frame.confidence;
+        output_frame.valid = true;
     }
 
-    TunnelFrameEstimate filtered_frame = frame;
-    filtered_frame.tangent = filtered_tangent_;
-    filtered_frame.center = filtered_center_;
-    filtered_frame.width = filtered_width_;
-    filtered_frame.lateral = filtered_frame.up.cross(filtered_tangent_).normalized();
-
-    CenterlineEstimate centerline =
-        estimator_.buildStraightCenterline(filtered_frame);
+    const CenterlineEstimate centerline =
+        estimator_.buildStraightCenterline(output_frame);
     if (!centerline.valid) {
 
         return;
@@ -263,7 +505,8 @@ void TunnelGuidanceNode::pointCloudCallback(
     last_valid_time_ = now;
     has_last_result_ = true;
     consecutive_valid_++;
-    const bool publish_valid = consecutive_valid_ >= valid_frame_count_;
+    const bool publish_valid =
+        wall_model_.initialized && consecutive_valid_ >= valid_frame_count_;
     publishResults(stamp, centerline, publish_valid);
 }
 
@@ -280,28 +523,21 @@ void TunnelGuidanceNode::publishResults(
     bool valid
 ) {
 
-    Eigen::Isometry3d base_to_output = Eigen::Isometry3d::Identity();
-    if (!getBaseToOutputTransform(stamp, base_to_output)) {
-
-        return;
-    }
-
     nav_msgs::msg::Path path_msg;
     path_msg.header.stamp = stamp;
     path_msg.header.frame_id = output_frame_;
-    for (const auto & point : centerline.points) {
+    for (std::size_t i = 0; i < centerline.points.size(); ++ i) {
 
         geometry_msgs::msg::PoseStamped pose;
         pose.header = path_msg.header;
-        const Eigen::Vector3d output_point = base_to_output * point;
-        const Eigen::Vector3d output_tangent =
-            base_to_output.linear() * centerline.tangents[0];
-        pose.pose.position.x = output_point.x();
-        pose.pose.position.y = output_point.y();
-        pose.pose.position.z = output_point.z();
+        const Eigen::Vector3d & point = centerline.points[i];
+        const Eigen::Vector3d & tangent = centerline.tangents[i];
+        pose.pose.position.x = point.x();
+        pose.pose.position.y = point.y();
+        pose.pose.position.z = point.z();
         pose.pose.orientation = tf2::toMsg(
             Eigen::Quaterniond(
-                Eigen::AngleAxisd(yawFromTangent(output_tangent), Eigen::Vector3d::UnitZ())));
+                Eigen::AngleAxisd(yawFromTangent(tangent), Eigen::Vector3d::UnitZ())));
         path_msg.poses.push_back(pose);
     }
     centerline_pub_->publish(path_msg);
@@ -312,12 +548,7 @@ void TunnelGuidanceNode::publishResults(
         centerline.points.size() - 1,
         static_cast<std::size_t>(
             lookahead_distance_ / geometry_params_.centerline_point_spacing));
-    const Eigen::Vector3d goal_point =
-        base_to_output * centerline.points[goal_index];
-    goal.pose.position.x = goal_point.x();
-    goal.pose.position.y = goal_point.y();
-    goal.pose.position.z = goal_point.z();
-    goal.pose.orientation = path_msg.poses[goal_index].pose.orientation;
+    goal.pose = path_msg.poses[goal_index].pose;
     local_goal_pub_->publish(goal);
 
     visualization_msgs::msg::MarkerArray markers;
@@ -338,8 +569,7 @@ void TunnelGuidanceNode::publishResults(
     }
     markers.markers.push_back(line);
 
-    const Eigen::Vector3d center_output =
-        base_to_output * centerline.local_frame.center;
+    const Eigen::Vector3d center_output = centerline.local_frame.center;
     const std::array<Eigen::Vector3d, 3> axes = {
         centerline.local_frame.tangent,
         centerline.local_frame.lateral,
@@ -363,8 +593,7 @@ void TunnelGuidanceNode::publishResults(
         arrow.points[0].x = center_output.x();
         arrow.points[0].y = center_output.y();
         arrow.points[0].z = center_output.z();
-        const Eigen::Vector3d tip_output =
-            center_output + base_to_output.linear() * axes[i] * lengths[i];
+        const Eigen::Vector3d tip_output = center_output + axes[i] * lengths[i];
         arrow.points[1].x = tip_output.x();
         arrow.points[1].y = tip_output.y();
         arrow.points[1].z = tip_output.z();

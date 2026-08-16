@@ -31,6 +31,12 @@ private:
     void pointCloudCallback(
         const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg);
 
+    void publishClassifiedPointClouds(
+        const rclcpp::Time & stamp,
+        const std::vector<Eigen::Vector3d> & left_points,
+        const std::vector<Eigen::Vector3d> & right_points,
+        const std::vector<Eigen::Vector3d> & ground_points);
+
     bool transformCloudToBase(
         const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg,
         std::vector<Eigen::Vector3d> & points);
@@ -38,6 +44,22 @@ private:
     bool getBaseToOutputTransform(
         const rclcpp::Time & stamp,
         Eigen::Isometry3d & transform) const;
+
+    TunnelFrameEstimate frameToOutputFrame(
+        const TunnelFrameEstimate & frame,
+        const Eigen::Isometry3d & base_to_output) const;
+
+    bool initializeWallModel(
+        const TunnelFrameEstimate & output_frame,
+        const Eigen::Isometry3d & base_to_output);
+
+    void classifyWithWallModel(
+        const std::vector<Eigen::Vector3d> & output_points,
+        std::vector<Eigen::Vector3d> & left_points,
+        std::vector<Eigen::Vector3d> & right_points,
+        std::vector<Eigen::Vector3d> & ground_points) const;
+
+    bool updateWallModel(const TunnelFrameEstimate & output_frame);
 
     void publishResults(
         const rclcpp::Time & stamp,
@@ -54,6 +76,9 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_goal_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr valid_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr left_points_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr right_points_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_points_pub_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -74,6 +99,13 @@ private:
     double filter_alpha_;
     int valid_frame_count_;
     double result_hold_time_;
+    double wall_band_ = 0.25;
+    double wall_model_update_alpha_ = 0.1;
+    double wall_position_jump_limit_ = 0.3;
+    int init_required_frames_ = 3;
+
+    TunnelWallModel wall_model_;
+    int calibration_valid_frames_ = 0;
 
     bool has_last_result_ = false;
     rclcpp::Time last_valid_time_{0, 0, RCL_ROS_TIME};
