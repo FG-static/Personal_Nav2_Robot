@@ -3,6 +3,10 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 extern "C" {
 #include "osqp/osqp.h"
 }
@@ -15,7 +19,7 @@ namespace my_mpc_controller {
         const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent,
         std::string name, std::shared_ptr<tf2_ros::Buffer> tf,
         std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) {
-        
+
         node_ = parent;
         auto node = node_.lock();
         tf_ = tf;
@@ -65,8 +69,13 @@ namespace my_mpc_controller {
             node, plugin_name_ + ".a_w_max", rclcpp::ParameterValue(1.0));
         node->get_parameter(plugin_name_ + ".a_w_max", max_a_w_);
 
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".terminal_control_weight", rclcpp::ParameterValue(20.0));
+        node->get_parameter(
+            plugin_name_ + ".terminal_control_weight", terminal_control_weight_);
 
-        Q_.setIdentity(); 
+
+        Q_.setIdentity();
         Q_(0, 0) = q_11; // x 权重
         Q_(1, 1) = q_22; // y 权重
         Q_(2, 2) = q_33;  // theta 权重
@@ -76,7 +85,7 @@ namespace my_mpc_controller {
         R_(1, 1) = r_22; // v_y 权重
         R_(2, 2) = r_33; // w 权重
 
-        F_.setIdentity(); 
+        F_.setIdentity();
         F_(0, 0) = f_11;
         F_(1, 1) = f_22;
         F_(2, 2) = f_33;
@@ -85,31 +94,41 @@ namespace my_mpc_controller {
             node, plugin_name_ + ".n", rclcpp::ParameterValue(10));
         node->get_parameter(plugin_name_ + ".n", N_);
 
-        double transform_tolerance;
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".track_path_yaw", rclcpp::ParameterValue(true));
+        node->get_parameter(plugin_name_ + ".track_path_yaw", track_path_yaw_);
+
+        nav2_util::declare_parameter_if_not_declared(
+            node, plugin_name_ + ".transform_tolerance", rclcpp::ParameterValue(0.1));
+        double transform_tolerance = 0.1;
         node->get_parameter(plugin_name_ + ".transform_tolerance", transform_tolerance);
         transform_tolerance_ = rclcpp::Duration::from_seconds(transform_tolerance);
 
         // 调试用
         mpc_debug_pub_ = node->create_publisher<geometry_msgs::msg::TwistStamped>("/mpc_debug/u", 1);
         ref_path_pub_ = node->create_publisher<nav_msgs::msg::Path>(plugin_name_ + "/target_path", 10);
-            
+
         RCLCPP_INFO(logger_, "自定义MPC控制器配置完成");
     }
-     
+
     void MyMPCController::setPlan(const nav_msgs::msg::Path &path) {
 
         global_plan_ = path;
-        processed_path_ = preprocessPath(global_plan_); 
+        processed_path_ = preprocessPath(global_plan_);
+        // 新路径的索引空间和旧路径无关，必须重置，否则 sampleReferencePath()
+        // 会从旧索引开始搜索，轻则参考点错误，重则越界访问。
+        last_closest_index_ = 0;
     }
-    
+
     std::vector<PathPoint> MyMPCController::preprocessPath(const nav_msgs::msg::Path &path) {
 
         std::vector<PathPoint> processed_path;
         if (path.poses.empty()) return processed_path;
+        const std::size_t pose_count = path.poses.size();
         double cumulative_s = 0.0;
-        processed_path.reserve(path.poses.size());
+        processed_path.reserve(pose_count);
 
-        for (int i = 0; i < path.poses.size(); ++ i) {
+        for (std::size_t i = 0; i < pose_count; ++ i) {
 
             PathPoint pt;
             pt.x = path.poses[i].pose.position.x;
@@ -118,7 +137,7 @@ namespace my_mpc_controller {
             // s
             if (i > 0) {
 
-                double 
+                double
                     dx = pt.x - processed_path.back().x,
                     dy = pt.y - processed_path.back().y;
                 cumulative_s += std::hypot(dx, dy);
@@ -126,9 +145,9 @@ namespace my_mpc_controller {
             pt.s = cumulative_s;
 
             // yaw
-            if (i < path.poses.size() - 1) {
+            if (i + 1 < pose_count) {
 
-                double 
+                double
                     dx_next = path.poses[i + 1].pose.position.x - pt.x,
                     dy_next = path.poses[i + 1].pose.position.y - pt.y;
                 pt.theta = std::atan2(dy_next, dx_next);
@@ -152,24 +171,40 @@ namespace my_mpc_controller {
      * @param start_search_idx 起始搜索索引
      * @return Eigen::Vector3d 目标点坐标
      */
-    Eigen::Vector3d interpolatePathByS(const std::vector<PathPoint>& path, double s_target, int start_search_idx) {
-        
-        for (int i = start_search_idx; i < path.size() - 1; ++ i) {
-            
+    Eigen::Vector3d interpolatePathByS(
+        const std::vector<PathPoint>& path,
+        double s_target,
+        int start_search_idx
+    ) {
+
+        const int point_count = static_cast<int>(path.size());
+        if (point_count == 1 || start_search_idx >= point_count - 1) {
+
+            return Eigen::Vector3d(path.back().x, path.back().y, path.back().theta);
+        }
+
+        const int first_idx = std::max(0, start_search_idx);
+        for (int i = first_idx; i < point_count - 1; ++ i) {
+
+            const double segment_length = path[i + 1].s - path[i].s;
+            if (segment_length <= 1e-12) {
+
+                continue;
+            }
+
             if (s_target >= path[i].s && s_target <= path[i + 1].s) {
-                
-                double rate = (s_target - path[i].s) / (path[i + 1].s - path[i].s);
-                
-                double 
-                    x = path[i].x + rate * (path[i + 1].x - path[i].x),
-                    y = path[i].y + rate * (path[i + 1].y - path[i].y);
-                
+
+                const double rate = (s_target - path[i].s) / segment_length;
+
+                const double x = path[i].x + rate * (path[i + 1].x - path[i].x);
+                const double y = path[i].y + rate * (path[i + 1].y - path[i].y);
+
                 // 角度插值
                 double diff = path[i + 1].theta - path[i].theta;
                 while (diff > M_PI) diff -= 2 * M_PI;
                 while (diff < -M_PI) diff += 2 * M_PI;
-                double theta = path[i].theta + rate * diff;
-                
+                const double theta = path[i].theta + rate * diff;
+
                 return Eigen::Vector3d(x, y, theta);
             }
         }
@@ -183,7 +218,7 @@ namespace my_mpc_controller {
      * @param v_ref 当前参考速度 (可以是动态计算的限速)
      * @param N 预测步长
      * @param dt 采样周期
-     * @return 采样后的参考序列 x_ref [x1, y1, th1, x2, y2, th2, ...]
+     * @return 采样后的参考序列 x_ref [x0, y0, th0, x1, y1, th1, ...]
      */
     Eigen::VectorXd MyMPCController::sampleReferencePath(
         const std::vector<PathPoint> &global_path,
@@ -193,49 +228,92 @@ namespace my_mpc_controller {
         double dt
     ) {
 
-        Eigen::VectorXd x_ref_vec(3 * (N + 1));
+        Eigen::VectorXd x_ref_vec = Eigen::VectorXd::Zero(3 * (N + 1));
+        const int point_count = static_cast<int>(global_path.size());
+        if (point_count == 0) {
 
-        // 寻点
-        int min_idx = last_closest_index_;
-        double min_dist = std::numeric_limits<double>::max();
-        for (int i = last_closest_index_; i < global_path.size(); ++ i) {
-
-            double d = hypot(global_path[i].x - cur_pose(0), global_path[i].y - cur_pose(1));
-            if (d < min_dist) {
-
-                min_dist = d;
-                min_idx = i;
-                last_closest_index_ = i;
-            }
+            return x_ref_vec;
         }
 
-        // 累积距离
-        double
-            s_start = global_path[min_idx].s,
-            total_path_len = global_path.back().s;
-        
-        // 采样
-        for (int i = 1; i <= N + 1; ++ i) {
+        if (point_count == 1) {
 
-            // 暂时先不考虑各段速度不同
-            double s_target = s_start + i * v_ref * dt;
+            const double ref_yaw =
+                track_path_yaw_ ? global_path[0].theta : cur_pose(2);
+            x_ref_vec.segment<3>(0) <<
+                global_path[0].x, global_path[0].y, ref_yaw;
+            for (int i = 1; i <= N; ++ i) {
 
-            Eigen::Vector3d ref_point;
+                x_ref_vec.segment<3>(i * 3) = x_ref_vec.segment<3>(0);
+            }
+            return x_ref_vec;
+        }
 
-            if (s_target >= total_path_len) {
+        // 把机器人位置投影到最近路径线段上，得到连续的参考弧长 s_start。
+        // 比“找最近离散点”更平滑，横向偏差大时也不会有明显滞后。
+        int best_segment_idx = 0;
+        double best_s = global_path.front().s;
+        double best_dist_sq = std::numeric_limits<double>::max();
+        for (int i = 0; i + 1 < point_count; ++ i) {
 
-                ref_point << global_path.back().x, global_path.back().y, global_path.back().theta;
-            } else {
+            const double segment_len = global_path[i + 1].s - global_path[i].s;
+            if (segment_len <= 1e-12) {
 
-                // 防突变线性插值
-                ref_point = interpolatePathByS(global_path, s_target, min_idx);
+                continue;
             }
 
-            // 麦克纳姆轮应不涉及旋转的权重
-            ref_point(2) = cur_pose(2);
+            const double
+                dx = global_path[i + 1].x - global_path[i].x,
+                dy = global_path[i + 1].y - global_path[i].y;
+            const double segment_len_sq = dx * dx + dy * dy;
+            if (segment_len_sq <= 1e-12) {
 
-            // 填充到Xk
-            x_ref_vec.segment<3>((i - 1) * 3) = ref_point;
+                continue;
+            }
+
+            const double rel_x = cur_pose(0) - global_path[i].x;
+            const double rel_y = cur_pose(1) - global_path[i].y;
+            const double t = std::clamp(
+                (rel_x * dx + rel_y * dy) / segment_len_sq, 0.0, 1.0);
+            const double
+                proj_x = global_path[i].x + t * dx,
+                proj_y = global_path[i].y + t * dy,
+                dist_sq = (cur_pose(0) - proj_x) * (cur_pose(0) - proj_x) +
+                          (cur_pose(1) - proj_y) * (cur_pose(1) - proj_y);
+            if (dist_sq < best_dist_sq) {
+
+                best_dist_sq = dist_sq;
+                best_segment_idx = i;
+                best_s = global_path[i].s + t * segment_len;
+            }
+        }
+        last_closest_index_ = best_segment_idx;
+
+        const double s_start = best_s;
+        const double total_path_len = global_path.back().s;
+
+        // k=0 使用当前最近路径点，k=1..N 向前采样。
+        // 旧实现从 k=1 开始填充，给初始误差人为加了一个 v_ref*dt 的偏置。
+        for (int i = 0; i <= N; ++ i) {
+
+            const double s_target = s_start + i * v_ref * dt;
+
+            Eigen::Vector3d ref_point;
+            if (s_target >= total_path_len) {
+
+                ref_point << global_path.back().x, global_path.back().y,
+                    global_path.back().theta;
+            } else {
+
+                ref_point = interpolatePathByS(global_path, s_target, best_segment_idx);
+            }
+
+            // 默认跟踪路径航向；如果只想纯平移跟踪，可设置 track_path_yaw:=false。
+            if (!track_path_yaw_) {
+
+                ref_point(2) = cur_pose(2);
+            }
+
+            x_ref_vec.segment<3>(i * 3) = ref_point;
         }
 
         return x_ref_vec;
@@ -256,7 +334,7 @@ namespace my_mpc_controller {
 
             geometry_msgs::msg::PoseStamped pose;
             pose.header = path_msg->header;
-            
+
             // 提取 x, y
             pose.pose.position.x = X_ref(3 * i);
             pose.pose.position.y = X_ref(3 * i + 1);
@@ -274,7 +352,7 @@ namespace my_mpc_controller {
     }
 
     void MyMPCController::updateDiscreteModel(
-        Eigen::Matrix3d &A, 
+        Eigen::Matrix3d &A,
         Eigen::Matrix3d &B,
         const double theta,
         const double dt
@@ -299,7 +377,7 @@ namespace my_mpc_controller {
              sin(theta) * dt,  cos(theta) * dt, 0.0,
              0.0,                          0.0,  dt;
     }
-    
+
     /**
      * @brief 构建 MPC 求解所需的 H f G
      * @param A, B 当前时刻线性化后的系统矩阵
@@ -309,14 +387,15 @@ namespace my_mpc_controller {
      * @param N 预测步长
      */
     MPCmatrices replaceLargeMatrix(
-        const Eigen::Matrix3d &A, 
+        const Eigen::Matrix3d &A,
         const Eigen::Matrix3d &B,
         const Eigen::Vector3d &x_k,
         const Eigen::VectorXd &X_ref,
         const Eigen::Matrix3d &Q,
         const Eigen::Matrix3d &R,
         const Eigen::Matrix3d &F,
-        int N
+        int N,
+        double terminal_control_weight
     ) {
 
         const int
@@ -362,6 +441,13 @@ namespace my_mpc_controller {
             R_bar.block<3, 3>(i * control_dim, i * control_dim) = R;
         }
 
+        // 对最后一步控制量额外惩罚，让预测轨迹终点速度趋近于 0。
+        // 没有这一项时，MPC 允许“到点时仍带速度”，真实执行层一滞后就会冲过目标。
+        R_bar.block<3, 3>(
+            (N - 1) * control_dim,
+            (N - 1) * control_dim) +=
+            terminal_control_weight * Eigen::Matrix3d::Identity();
+
         // 输出
         MPCmatrices mpcm_out;
         Eigen::VectorXd E = M * x_k - X_ref;
@@ -378,34 +464,84 @@ namespace my_mpc_controller {
         nav2_core::GoalChecker */*goal_checker*/) {
 
         auto node = node_.lock();
+
+        auto make_zero_twist = [&]() {
+
+            geometry_msgs::msg::TwistStamped cmd_vel;
+            cmd_vel.header.stamp = clock_->now();
+            cmd_vel.header.frame_id = "base_link";
+            return cmd_vel;
+        };
+
+        if (!node || processed_path_.empty()) {
+
+            RCLCPP_WARN_THROTTLE(
+                logger_, *clock_, 2000,
+                "MPC has no valid global path, returning zero velocity");
+            return make_zero_twist();
+        }
+
         // x_k
-        double 
+        const double
             x = pose.pose.position.x,
             y = pose.pose.position.y,
             theta = tf2::getYaw(pose.pose.orientation);
+        const double
+            v_ref_x_raw = velocity.linear.x,
+            v_ref_y_raw = velocity.linear.y,
+            w_ref_raw = velocity.angular.z;
+
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(theta) ||
+            !std::isfinite(v_ref_x_raw) || !std::isfinite(v_ref_y_raw) ||
+            !std::isfinite(w_ref_raw)
+        ) {
+
+            RCLCPP_WARN_THROTTLE(
+                logger_, *clock_, 2000,
+                "MPC received non-finite pose or velocity, returning zero velocity");
+            return make_zero_twist();
+        }
+
+        const double v_ref_x = v_ref_x_raw;
+        const double v_ref_y = v_ref_y_raw;
+        const double w_ref = w_ref_raw;
         Eigen::Vector3d x_k(x, y, theta);
-        
-        // dt
-        double dt;
-        static rclcpp::Time last_time = clock_->now();
+
+        // dt：优先使用实际控制周期，异常时回退到标称周期。
         rclcpp::Time current_time = clock_->now();
-        dt = (current_time - last_time).seconds();
-        if (dt <= 0.0 || dt > 0.5) dt = dt_;
-        last_time = current_time;
+        double dt = dt_;
+        if (has_last_cmd_time_) {
+
+            dt = (current_time - last_cmd_time_).seconds();
+        }
+        if (dt <= 0.0 || dt > 0.5) {
+
+            dt = dt_;
+        }
+        last_cmd_time_ = current_time;
+        has_last_cmd_time_ = true;
 
         // X_ref
-        //RCLCPP_INFO(logger_, "dt: %f", dt);
-        double v_ref_x = velocity.linear.x, v_ref_y = velocity.linear.y, w_ref = velocity.angular.z;
-        double v_ref = std::max(0.25, std::hypot(v_ref_x, v_ref_y));
+        // 参考点间距由“期望速度”决定，不要用当前速度生成参考轨迹：
+        // 若参考间距随当前速度变化，低速时 MPC 会停在低速平衡点，越走越慢。
+        // 这里按到终点的距离做一个简单的梯形速度曲线，保证低速起步并提前减速。
+        const double dist_to_goal = std::hypot(
+            processed_path_.back().x - x,
+            processed_path_.back().y - y);
+        double v_ref = std::min(
+            max_v_, std::sqrt(2.0 * max_a_v_ * dist_to_goal));
+        v_ref = std::max(0.25, v_ref);
+
         Eigen::VectorXd X_ref = sampleReferencePath(processed_path_, x_k, v_ref, N_, dt);
 
         // 线性化AB
         Eigen::Matrix3d A;
         Eigen::Matrix3d B;
         updateDiscreteModel(A, B, theta, dt); // 暂时先这样
-        
+
         // 构建HfG
-        MPCmatrices mpcm = replaceLargeMatrix(A, B, x_k, X_ref, Q_, R_, F_, N_);
+        MPCmatrices mpcm = replaceLargeMatrix(
+            A, B, x_k, X_ref, Q_, R_, F_, N_, terminal_control_weight_);
 
         // 求解U
         Eigen::SparseMatrix<double> H_sparse = 2.0 * mpcm.H.sparseView();
@@ -483,7 +619,7 @@ namespace my_mpc_controller {
         );
         data->q = mpcm.f.data(); // 一次项
         data->A = csc_matrix( // 约束矩阵
-            2 * n, n, 
+            2 * n, n,
             A_csc.nonZeros(),
             A_csc.valuePtr(),
             (c_int*)A_csc.innerIndexPtr(),
@@ -504,7 +640,11 @@ namespace my_mpc_controller {
         if (status == 0 && work) {
 
             osqp_solve(work);
-            if (work->info->status_val >= 0 && work->solution) {
+            const c_int solver_status = work->info ? work->info->status_val : OSQP_NON_CVX;
+            if ((solver_status == OSQP_SOLVED ||
+                 solver_status == OSQP_SOLVED_INACCURATE) &&
+                work->solution
+            ) {
 
                 U_sol.resize(n);
                 for (int i = 0; i < n / 3; ++ i) {
@@ -513,10 +653,19 @@ namespace my_mpc_controller {
                     U_sol[i * 3 + 1] = work->solution->x[i * 3 + 1];
                     U_sol[i * 3 + 2] = work->solution->x[i * 3 + 2];
                 }
+            } else {
+
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *clock_, 2000,
+                    "MPC: OSQP solve failed, status=%d. Returning zero velocity.",
+                    static_cast<int>(solver_status));
             }
         } else {
 
-            RCLCPP_INFO(logger_, "MPC: OSQP初始化失败");
+            RCLCPP_WARN_THROTTLE(
+                logger_, *clock_, 2000,
+                "MPC: OSQP setup failed, status=%d. Returning zero velocity.",
+                static_cast<int>(status));
         }
 
         // 释放
@@ -540,6 +689,28 @@ namespace my_mpc_controller {
         v_ycmd = std::clamp(v_ycmd, -max_v_, max_v_);
         w_cmd = std::clamp(w_cmd, -max_w_, max_w_);
 
+        // 终点保护：如果已经很近且几乎停住，直接输出零速度，
+        // 避免因模型/执行器滞后在目标点附近来回蹭。
+        const double current_linear_speed =
+            std::hypot(v_ref_x, v_ref_y);
+        if (dist_to_goal < 0.03 && current_linear_speed < 0.05) {
+
+            return make_zero_twist();
+        }
+
+        // 终点保护：命令速度不能超过“剩余距离内能刹停的速度”。
+        // 这只是最后一道安全限幅，正常减速应由 terminal_control_weight 完成。
+        const double stop_speed_limit = std::sqrt(
+            2.0 * max_a_v_ * std::max(0.0, dist_to_goal));
+        const double cmd_linear_speed = std::hypot(v_xcmd, v_ycmd);
+        if (cmd_linear_speed > stop_speed_limit &&
+            cmd_linear_speed > 1e-3)
+        {
+            const double scale = stop_speed_limit / cmd_linear_speed;
+            v_xcmd *= scale;
+            v_ycmd *= scale;
+        }
+
         // 封装
         geometry_msgs::msg::TwistStamped cmd_vel;
         cmd_vel.header.stamp = clock_->now();
@@ -558,7 +729,7 @@ namespace my_mpc_controller {
     void MyMPCController::deactivate() { RCLCPP_INFO(logger_, "插件已停用"); }
     void MyMPCController::cleanup() { RCLCPP_INFO(logger_, "插件已清理"); }
     void MyMPCController::setSpeedLimit(const double & speed_limit, const bool & percentage) {
-        
+
         (void)speed_limit;
         (void)percentage;
         RCLCPP_INFO(logger_, "收到限速指令，当前插件尚未实现具体的限速逻辑");

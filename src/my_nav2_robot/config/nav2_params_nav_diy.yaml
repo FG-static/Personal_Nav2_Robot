@@ -84,7 +84,9 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: True
-    current_goal_checker: "general_goal_checker" #
+    # 麦轮只关心 XY 位置，使用 StoppedGoalChecker：
+    # 同时要求机器人已经停住，避免在 0.25m 处提前判成功导致冲过目标。
+    current_goal_checker: "stopped_goal_checker"
     current_progress_checker: "progress_checker" #
     controller_frequency: 20.0
     costmap_update_timeout: 0.30
@@ -93,7 +95,7 @@ controller_server:
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    goal_checker_plugins: ["stopped_goal_checker"]
     controller_plugins: ["FollowPath", "MPC", "DWA"]
     odom_topic: /bievr_lio/odom
     use_realtime_priority: false
@@ -110,11 +112,14 @@ controller_server:
     #  xy_goal_tolerance: 0.25
     #  yaw_goal_tolerance: 0.25
     #  stateful: True
-    general_goal_checker:
-      stateful: True
-      plugin: "nav2_controller::SimpleGoalChecker"
+    stopped_goal_checker:
+      plugin: "nav2_controller::StoppedGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      # 麦轮不要求最终朝向，设成 2pi 表示任意 yaw 都算满足
+      yaw_goal_tolerance: 6.2832
+      trans_stopped_velocity: 0.05
+      rot_stopped_velocity: 0.05
+      stateful: True
     FollowPath:
       plugin: "my_teb_controller/MyTebController"
       teb_autosize: true
@@ -155,11 +160,16 @@ controller_server:
       f_11: 60.0
       f_22: 60.0
       f_33: 60.0
-      v_max: 2.0
+      v_max: 1.6
       w_max: 1.0
       a_v_max: 1.5
       a_w_max: 1.0
       n: 10
+      # 麦轮可以全向平移，当前场景不要求车身朝向，关闭路径航向跟踪。
+      # 如果目标带 yaw 且需要对准，再改回 true。
+      track_path_yaw: false
+      # 终点控制惩罚：越大越早减速、终点停得越稳
+      terminal_control_weight: 50.0
       transform_tolerance: 0.1
     DWA:
       plugin: "my_nav2_controller/MyDWAController"

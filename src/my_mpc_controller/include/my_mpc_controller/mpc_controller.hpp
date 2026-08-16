@@ -116,12 +116,16 @@ namespace my_mpc_controller {
         // MPC参数
         int N_ = 10; // 预测区间
         double dt_ = 0.1; // 采样时间 - 动态
+        bool track_path_yaw_ = true; // 是否跟踪参考路径的航向
+        rclcpp::Time last_cmd_time_{0, 0, RCL_ROS_TIME};
+        bool has_last_cmd_time_ = false;
         rclcpp::Duration transform_tolerance_{0, 0};
         double 
             max_v_ = 2.0, // 最大线速度
             max_w_ = 1.0, // 最大角速度
             max_a_v_ = 1.5, // 最大线加速度
             max_a_w_ = 1.0; // 最大角加速度
+        double terminal_control_weight_ = 20.0; // 终端控制惩罚，强制规划末速度为 0
         double // 方便传数据
             q_11 = 30.0, // x
             q_22 = 30.0, // y
