@@ -141,8 +141,10 @@ bool TunnelGeometryEstimator::solveTunnelDirection(
 
     // 特征值最小的
     tangent = solver.eigenvectors().col(0).normalized();
+    const double adjacent_eigenvalue = std::max(solver.eigenvalues()[1], 1e-9);
     confidence = (solver.eigenvalues()[1] - solver.eigenvalues()[0]) /
-        std::max(solver.eigenvalues()[2], 1e-9);
+        adjacent_eigenvalue;
+    confidence = std::clamp(confidence, 0.0, 1.0);
     if (confidence < params_.min_direction_eigen_gap) {
 
         return false;

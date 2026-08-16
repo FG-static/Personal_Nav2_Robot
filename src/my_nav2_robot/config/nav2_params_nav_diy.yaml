@@ -377,6 +377,7 @@ planner_server:
     AStar:
       plugin: "my_nav2_planner/MyAStarPlanner"
       unknown_cost: 5.0
+      treat_unknown_as_free: true
       interpolation_resolution: 0.1
     RRTStar:
       plugin: "my_rrtstar_planner/MyRRTStarPlanner"
@@ -388,9 +389,11 @@ planner_server:
       collision_check_resolution: 0.02
       max_iterations_after_goal: 1000
       allow_unknown: true
+      treat_unknown_as_free: false
     HybridAStar:
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       unknown_cost: 5.0
+      treat_unknown_as_free: false
       interpolation_resolution: 0.1
       max_iterations: 80000
       primitive_duration: 0.25

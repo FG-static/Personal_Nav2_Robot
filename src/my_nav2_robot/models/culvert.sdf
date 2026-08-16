@@ -2,7 +2,7 @@
 <sdf version="1.10">
     <!--
       涵洞场景：
-      - 长度方向改为 X 轴，总长 12m（x: -6.0 ~ 6.0）
+      - 长度方向改为 X 轴，总长 24m（x: -12.0 ~ 12.0）
       - 净宽 4m（y: -2.0 ~ 2.0），净高 2m（z: 0.0 ~ 2.0）
       - 两侧墙各厚 0.2m，不封底/不封顶/两端开口
       - 墙体内嵌若干盒状/圆柱特征物，只向通道内突出约 0.08~0.10m
@@ -10,17 +10,17 @@
     <model name="culvert">
         <static>true</static>
         <link name="culvert_walls_link">
-            <!-- 下侧墙（y < 0）：长 12m 沿 X，厚 0.2m 沿 Y，高 2m 沿 Z -->
+            <!-- 下侧墙（y < 0）：长 24m 沿 X，厚 0.2m 沿 Y，高 2m 沿 Z -->
             <collision name="lower_wall_collision">
                 <pose>0 -2.1 1.0 0 0 0</pose>
                 <geometry>
-                    <box><size>12.0 0.2 2.0</size></box>
+                    <box><size>24.0 0.2 2.0</size></box>
                 </geometry>
             </collision>
             <visual name="lower_wall_visual">
                 <pose>0 -2.1 1.0 0 0 0</pose>
                 <geometry>
-                    <box><size>12.0 0.2 2.0</size></box>
+                    <box><size>24.0 0.2 2.0</size></box>
                 </geometry>
                 <material>
                     <ambient>0.35 0.35 0.35 1</ambient>
@@ -32,13 +32,13 @@
             <collision name="upper_wall_collision">
                 <pose>0 2.1 1.0 0 0 0</pose>
                 <geometry>
-                    <box><size>12.0 0.2 2.0</size></box>
+                    <box><size>24.0 0.2 2.0</size></box>
                 </geometry>
             </collision>
             <visual name="upper_wall_visual">
                 <pose>0 2.1 1.0 0 0 0</pose>
                 <geometry>
-                    <box><size>12.0 0.2 2.0</size></box>
+                    <box><size>24.0 0.2 2.0</size></box>
                 </geometry>
                 <material>
                     <ambient>0.35 0.35 0.35 1</ambient>
@@ -171,6 +171,80 @@
                 <material>
                     <ambient>0.30 0.30 0.35 1</ambient>
                     <diffuse>0.60 0.60 0.75 1</diffuse>
+                </material>
+            </visual>
+
+
+            <!-- ================= 延长段特征物（x: 6.0 ~ 12.0） ================= -->
+            <!-- 下侧延长特征 1：盒状凸起，x=7.0m，向通道内突出 0.10m -->
+            <collision name="lower_feature_box_ext_1_collision">
+                <pose>7.0 -2.05 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.40 0.30 0.25</size></box>
+                </geometry>
+            </collision>
+            <visual name="lower_feature_box_ext_1_visual">
+                <pose>7.0 -2.05 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.40 0.30 0.25</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.35 0.35 0.30 1</ambient>
+                    <diffuse>0.75 0.75 0.60 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 下侧延长特征 2：竖圆柱，x=10.0m，半径 0.08m，向通道内突出 0.08m -->
+            <collision name="lower_feature_cylinder_ext_2_collision">
+                <pose>10.0 -2.0 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+            </collision>
+            <visual name="lower_feature_cylinder_ext_2_visual">
+                <pose>10.0 -2.0 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.35 0.30 1</ambient>
+                    <diffuse>0.60 0.75 0.60 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 上侧延长特征 1：盒状凸起，x=8.0m，向通道内突出 0.10m -->
+            <collision name="upper_feature_box_ext_1_collision">
+                <pose>8.0 2.05 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.50 0.30 0.30</size></box>
+                </geometry>
+            </collision>
+            <visual name="upper_feature_box_ext_1_visual">
+                <pose>8.0 2.05 0.25 0 0 0</pose>
+                <geometry>
+                    <box><size>0.50 0.30 0.30</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.30 0.35 1</ambient>
+                    <diffuse>0.60 0.60 0.75 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 上侧延长特征 2：竖圆柱，x=11.0m，半径 0.08m，向通道内突出 0.08m -->
+            <collision name="upper_feature_cylinder_ext_2_collision">
+                <pose>11.0 2.0 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+            </collision>
+            <visual name="upper_feature_cylinder_ext_2_visual">
+                <pose>11.0 2.0 0.25 0 0 0</pose>
+                <geometry>
+                    <cylinder><radius>0.08</radius><length>0.25</length></cylinder>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.35 0.30 1</ambient>
+                    <diffuse>0.60 0.75 0.60 1</diffuse>
                 </material>
             </visual>
 

@@ -118,6 +118,7 @@ struct PrimitiveCostDebug {
 struct PlannerParams {
 
     double unknown_cost = 5.0;
+    bool treat_unknown_as_free = false;
     double interpolation_resolution = 0.05;
     double xy_resolution = 0.05;
     int yaw_bin_count = 72;

@@ -1,6 +1,7 @@
 #include "my_nav2_planner/astar_planner.hpp"
 #include "my_planning_metrics/path_metrics.hpp"
 #include "nav2_core/planner_exceptions.hpp"
+#include "nav2_costmap_2d/cost_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
@@ -27,6 +28,10 @@ namespace my_nav2_planner {
         nav2_util::declare_parameter_if_not_declared(
             node_, name_ + ".unknown_cost", rclcpp::ParameterValue(5.0));
         node_->get_parameter(name_ + ".unknown_cost", unknown_cost_);
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name_ + ".treat_unknown_as_free", rclcpp::ParameterValue(false));
+        node_->get_parameter(
+            name_ + ".treat_unknown_as_free", treat_unknown_as_free_);
         nav2_util::declare_parameter_if_not_declared(
             node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(0.1));
         node_->get_parameter(name_ + ".interpolation_resolution", interpolation_resolution_);
@@ -155,10 +160,17 @@ namespace my_nav2_planner {
                     int next_idx = ny * width + nx;
                     unsigned char cost = costmap_->getCost(nx, ny);
 
-                    if (cost >= 200 && cost <= 254) continue;
+                    // 障碍物仍然不可通行；未知区域根据开关决定是否与自由区域完全等价。
+                    if (cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE &&
+                        cost != nav2_costmap_2d::NO_INFORMATION)
+                        continue;
 
-                    double extra_cost = (cost == 255) ? unknown_cost_ : 0.0,
-                        step_cost = std::sqrt(dx * dx + dy * dy);
+                    double extra_cost = 0.0;
+                    if (cost == nav2_costmap_2d::NO_INFORMATION &&
+                        !treat_unknown_as_free_)
+                        extra_cost = unknown_cost_;
+
+                    double step_cost = std::sqrt(dx * dx + dy * dy);
                     double tentative_g = g_values[cur_idx] + step_cost + extra_cost;
 
                     if (tentative_g < g_values[next_idx]) {

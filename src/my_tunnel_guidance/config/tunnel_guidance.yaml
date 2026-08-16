@@ -29,8 +29,15 @@ tunnel_guidance:
         centerline_point_spacing: 0.2
         lookahead_distance: 5.0
 
+        # Optional Nav2 auto goal
+        enable_auto_goal: true
+        auto_goal_frame_id: map
+        min_goal_send_interval: 1.0
+        goal_moved_resend_distance: 0.5
+
         # Initial calibration and wall model
         init_required_frames: 3
+        ground_band: 0.15
         wall_band: 0.25
         wall_model_update_alpha: 0.1
         wall_position_jump_limit: 0.3

@@ -55,6 +55,11 @@ namespace my_rrtstar_planner {
             node_, name_ + ".allow_unknown", rclcpp::ParameterValue(true));
         node_->get_parameter(name_ + ".allow_unknown", allow_unknown_);
 
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name_ + ".treat_unknown_as_free", rclcpp::ParameterValue(false));
+        node_->get_parameter(
+            name_ + ".treat_unknown_as_free", treat_unknown_as_free_);
+
         // 初始化随机数生成器
         rng.seed(std::random_device{}());
         double 
@@ -75,8 +80,11 @@ namespace my_rrtstar_planner {
     bool MyRRTStarPlanner::isCellTraversable(unsigned int mx, unsigned int my) const {
 
         const unsigned char cost = costmap_->getCost(mx, my);
-        return cost < nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE ||
-            (allow_unknown_ && cost == nav2_costmap_2d::NO_INFORMATION);
+        if (cost < nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE)
+            return true;
+        if (cost == nav2_costmap_2d::NO_INFORMATION)
+            return allow_unknown_ || treat_unknown_as_free_;
+        return false;
     }
 
     bool MyRRTStarPlanner::isCollisionFreePath(int idx1, int idx2) {

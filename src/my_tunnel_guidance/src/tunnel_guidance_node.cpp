@@ -1,6 +1,8 @@
 #include "my_tunnel_guidance/tunnel_guidance_node.hpp"
+#include "my_tunnel_guidance/pointcloud_timing.hpp"
 
 #include <tf2_eigen/tf2_eigen.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/common/transforms.h>
@@ -10,8 +12,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -42,6 +46,11 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     wall_model_update_alpha_ = declare_parameter("wall_model_update_alpha", 0.1);
     wall_position_jump_limit_ = declare_parameter("wall_position_jump_limit", 0.3);
     init_required_frames_ = declare_parameter("init_required_frames", 3);
+    ground_band_ = declare_parameter("ground_band", 0.15);
+    enable_auto_goal_ = declare_parameter("enable_auto_goal", false);
+    auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
+    min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
+    goal_moved_resend_distance_ = declare_parameter("goal_moved_resend_distance", 0.5);
 
     geometry_params_.min_ground_points =
         declare_parameter("min_ground_points", 100);
@@ -78,6 +87,15 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     ground_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/ground_points", rclcpp::SensorDataQoS());
 
+    if (enable_auto_goal_) {
+
+        auto_goal_client_ = rclcpp_action::create_client<NavigateToPose>(
+            this, "navigate_to_pose");
+        auto_goal_timer_ = create_wall_timer(
+            std::chrono::milliseconds(500),
+            std::bind(&TunnelGuidanceNode::maybeSendAutoGoal, this));
+    }
+
     RCLCPP_INFO(get_logger(), "Tunnel guidance node started");
 }
 
@@ -101,19 +119,15 @@ bool TunnelGuidanceNode::transformCloudToBase(
     }
 
     geometry_msgs::msg::TransformStamped transform;
-    try {
-
-        transform = tf_buffer_->lookupTransform(
-            estimation_frame_, cloud_msg->header.frame_id, cloud_msg->header.stamp,
-            rclcpp::Duration::from_seconds(0.2)
-        );
-    } catch (const tf2::TransformException & ex) {
+    if (!lookupTransformWithFallback(
+            estimation_frame_, cloud_msg->header.frame_id,
+            cloud_msg->header.stamp, transform)) {
 
         RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 2000,
-            "Cannot transform cloud to %s at stamp %.3f: %s",
+            "Cannot transform cloud to %s at stamp %.3f",
             estimation_frame_.c_str(),
-            rclcpp::Time(cloud_msg->header.stamp).seconds(), ex.what());
+            rclcpp::Time(cloud_msg->header.stamp).seconds());
         return false;
     }
 
@@ -234,6 +248,34 @@ bool TunnelGuidanceNode::getBaseToOutputTransform(
  * @param base_to_output 基坐标系到输出坐标系的变换
  * @return TunnelFrameEstimate 转换后的隧道帧
  */
+bool TunnelGuidanceNode::lookupTransformWithFallback(
+    const std::string & target_frame,
+    const std::string & source_frame,
+    const rclcpp::Time & stamp,
+    geometry_msgs::msg::TransformStamped & transform
+) const {
+
+    try {
+
+        transform = tf_buffer_->lookupTransform(
+            target_frame, source_frame, stamp,
+            rclcpp::Duration::from_seconds(0.5));
+        return true;
+    } catch (const tf2::TransformException &) {
+
+        // 动态 TF 启动阶段或者时间戳不完全同步时，使用当前最新 TF 兜底。
+        try {
+
+            transform = tf_buffer_->lookupTransform(
+                target_frame, source_frame, tf2::TimePointZero);
+            return true;
+        } catch (const tf2::TransformException &) {
+
+            return false;
+        }
+    }
+}
+
 TunnelFrameEstimate TunnelGuidanceNode::frameToOutputFrame(
     const TunnelFrameEstimate & frame,
     const Eigen::Isometry3d & base_to_output
@@ -291,7 +333,10 @@ void TunnelGuidanceNode::classifyWithWallModel(
 
     for (const auto & point : output_points) {
 
-        if (point.z() <= ground_max_z_) {
+        // 标定后使用墙体模型中的地面平面分类，不依赖 odom 的绝对 Z 值。
+        const double ground_distance =
+            wall_model_.up.dot(point - wall_model_.center);
+        if (std::abs(ground_distance) <= ground_band_) {
 
             ground_points.push_back(point);
             continue;
@@ -360,7 +405,8 @@ void TunnelGuidanceNode::pointCloudCallback(
     if (!transformCloudToBase(cloud_msg, base_points))
         return;
 
-    const rclcpp::Time stamp(cloud_msg->header.stamp);
+    // BIEVR-LIO publishes odometry at the scan end, not at header.stamp.
+    const rclcpp::Time stamp = pointCloudEndStamp(*cloud_msg);
     Eigen::Isometry3d base_to_output = Eigen::Isometry3d::Identity();
     if (!getBaseToOutputTransform(stamp, base_to_output)) {
 
@@ -464,16 +510,15 @@ void TunnelGuidanceNode::pointCloudCallback(
         if (!observed_frame.valid) {
 
             consecutive_valid_ = 0;
-            if (has_last_result_ &&
-                (now - last_valid_time_).seconds() <= result_hold_time_
-            ) {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Wall observation invalid: left=%zu right=%zu ground=%zu, "
+                "continue using calibrated wall model",
+                left_points.size(), right_points.size(), ground_points.size());
+        } else {
 
-                publishResults(stamp, last_centerline_, false);
-            }
-            return;
+            updateWallModel(observed_frame);
         }
-
-        updateWallModel(observed_frame);
 
         // 用墙体模型在机器人当前纵向位置生成中心线。
         const Eigen::Vector3d robot_position = base_to_output.translation();
@@ -551,6 +596,22 @@ void TunnelGuidanceNode::publishResults(
     goal.pose = path_msg.poses[goal_index].pose;
     local_goal_pub_->publish(goal);
 
+    if (enable_auto_goal_) {
+
+        latest_auto_goal_ = goal;
+        has_latest_auto_goal_ = true;
+        last_published_valid_ = valid;
+        // 墙体模型已经标定后，单帧观测失败不应打断正在执行的 Nav2 目标；
+        // 当前目标仍由 Nav2 的 costmap/局部规划器负责避障。
+        if (!valid && !wall_model_.initialized &&
+            waiting_for_auto_goal_result_) {
+
+            auto_goal_client_->async_cancel_all_goals();
+            waiting_for_auto_goal_result_ = false;
+            has_sent_auto_goal_ = false;
+        }
+    }
+
     visualization_msgs::msg::MarkerArray markers;
     visualization_msgs::msg::Marker line;
     line.header = path_msg.header;
@@ -606,7 +667,135 @@ void TunnelGuidanceNode::publishResults(
     valid_pub_->publish(valid_msg);
 }
 
+void TunnelGuidanceNode::maybeSendAutoGoal() {
+
+    if (!enable_auto_goal_ || !auto_goal_client_ ||
+        !wall_model_.initialized || !has_latest_auto_goal_ ||
+        waiting_for_auto_goal_result_) {
+
+        return;
+    }
+
+    const rclcpp::Time now = get_clock()->now();
+    if (has_sent_auto_goal_ &&
+        (now - last_auto_goal_send_time_).seconds() < min_goal_send_interval_) {
+
+        return;
+    }
+
+    if (has_sent_auto_goal_) {
+
+        const double dx =
+            latest_auto_goal_.pose.position.x - last_sent_auto_goal_.pose.position.x;
+        const double dy =
+            latest_auto_goal_.pose.position.y - last_sent_auto_goal_.pose.position.y;
+        if (std::hypot(dx, dy) < goal_moved_resend_distance_) {
+
+            return;
+        }
+    }
+
+    geometry_msgs::msg::PoseStamped goal_in_map;
+    if (!transformGoalToMap(latest_auto_goal_, goal_in_map)) {
+
+        return;
+    }
+
+    if (!auto_goal_client_->wait_for_action_server(std::chrono::seconds(2))) {
+
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "NavigateToPose action server is not available");
+        return;
+    }
+
+    NavigateToPose::Goal action_goal;
+    action_goal.pose = goal_in_map;
+    action_goal.behavior_tree = "";
+
+    auto send_goal_options =
+        rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
+    send_goal_options.goal_response_callback =
+        std::bind(&TunnelGuidanceNode::autoGoalResponseCallback, this, std::placeholders::_1);
+    send_goal_options.result_callback =
+        std::bind(&TunnelGuidanceNode::autoGoalResultCallback, this, std::placeholders::_1);
+
+    last_sent_auto_goal_ = latest_auto_goal_;
+    has_sent_auto_goal_ = true;
+    last_auto_goal_send_time_ = now;
+    waiting_for_auto_goal_result_ = true;
+
+    RCLCPP_INFO(
+        get_logger(),
+        "Sending auto goal: x=%.2f y=%.2f yaw=%.2f",
+        action_goal.pose.pose.position.x,
+        action_goal.pose.pose.position.y,
+        std::atan2(
+            2.0 * (action_goal.pose.pose.orientation.w * action_goal.pose.pose.orientation.z +
+                   action_goal.pose.pose.orientation.x * action_goal.pose.pose.orientation.y),
+            1.0 - 2.0 * (action_goal.pose.pose.orientation.y * action_goal.pose.pose.orientation.y +
+                         action_goal.pose.pose.orientation.z * action_goal.pose.pose.orientation.z)));
+    auto_goal_client_->async_send_goal(action_goal, send_goal_options);
+}
+
+void TunnelGuidanceNode::autoGoalResponseCallback(
+    const GoalHandleNavigateToPose::SharedPtr & goal_handle
+) {
+
+    if (!goal_handle) {
+
+        RCLCPP_WARN(get_logger(), "Auto goal was rejected by NavigateToPose");
+        waiting_for_auto_goal_result_ = false;
+        has_sent_auto_goal_ = false;
+    }
+}
+
+void TunnelGuidanceNode::autoGoalResultCallback(
+    const GoalHandleNavigateToPose::WrappedResult & result
+) {
+
+    waiting_for_auto_goal_result_ = false;
+    switch (result.code) {
+
+        case rclcpp_action::ResultCode::SUCCEEDED:
+            RCLCPP_INFO(get_logger(), "Auto goal succeeded");
+            break;
+        case rclcpp_action::ResultCode::ABORTED:
+            RCLCPP_WARN(get_logger(), "Auto goal aborted, will retry with latest goal");
+            has_sent_auto_goal_ = false;
+            break;
+        case rclcpp_action::ResultCode::CANCELED:
+            RCLCPP_INFO(get_logger(), "Auto goal canceled");
+            has_sent_auto_goal_ = false;
+            break;
+        default:
+            has_sent_auto_goal_ = false;
+            break;
+    }
+}
+
+bool TunnelGuidanceNode::transformGoalToMap(
+    const geometry_msgs::msg::PoseStamped & input,
+    geometry_msgs::msg::PoseStamped & output
+) const {
+
+    geometry_msgs::msg::TransformStamped transform;
+    if (!lookupTransformWithFallback(
+            auto_goal_frame_id_, input.header.frame_id,
+            input.header.stamp, transform)) {
+
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Cannot transform local goal to %s", auto_goal_frame_id_.c_str());
+        return false;
+    }
+
+    tf2::doTransform(input, output, transform);
+    return true;
+}
+
 }  // namespace my_tunnel_guidance
+
 
 int main(int argc, char ** argv) {
 

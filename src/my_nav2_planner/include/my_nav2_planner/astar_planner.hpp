@@ -45,6 +45,7 @@ namespace my_nav2_planner {
         nav2_costmap_2d::Costmap2D *costmap_;
         std::string global_frame_, name_;
         double unknown_cost_, interpolation_resolution_;
+        bool treat_unknown_as_free_ = false;
         rclcpp::Publisher<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_pub_;
         std::uint64_t replan_event_id_ = 0;
     };

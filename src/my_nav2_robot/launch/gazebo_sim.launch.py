@@ -72,10 +72,10 @@ def generate_launch_description():
     )
 
     # 机器人初始位置：
-    #   culvert -> 左侧入口处（涵洞沿 X 轴，左端 x=-6.0；车身略向内放 0.2m）
+    #   culvert -> 左侧入口处（涵洞沿 X 轴，左端 x=-12.0；车身略向内放 0.2m）
     #   map1    -> 地图中心
     robot_spawn_x = PythonExpression([
-        "'-5.8' if '", scene, "' == 'culvert' else '0.0'"
+        "'-11.8' if '", scene, "' == 'culvert' else '0.0'"
     ])
 
     spawn_entity = Node(

@@ -92,3 +92,31 @@ TEST(TunnelGeometryEstimator, MissingWallIsInvalid)
     const auto frame = estimator.estimateFrame(left, right, ground);
     EXPECT_FALSE(frame.valid);
 }
+
+TEST(TunnelGeometryEstimator, DirectionConfidenceHandlesUnequalPlaneWeights) {
+    TunnelGeometryEstimator estimator;
+
+    my_tunnel_guidance::PlaneEstimate left;
+    left.normal = Eigen::Vector3d::UnitY();
+    left.eigenvalues = Eigen::Vector3d(1e-5, 0.3, 2.6);
+    left.rmse = 0.004;
+    left.point_count = 2200U;
+    left.valid = true;
+
+    my_tunnel_guidance::PlaneEstimate right = left;
+    right.normal = -Eigen::Vector3d::UnitY();
+
+    my_tunnel_guidance::PlaneEstimate ground;
+    ground.normal = Eigen::Vector3d::UnitZ();
+    ground.eigenvalues = Eigen::Vector3d(3e-4, 2.0, 2.3);
+    ground.rmse = 0.018;
+    ground.point_count = 850U;
+    ground.valid = true;
+
+    Eigen::Vector3d tangent = Eigen::Vector3d::Zero();
+    double confidence = 0.0;
+    ASSERT_TRUE(estimator.solveTunnelDirection(
+        left, right, ground, tangent, confidence));
+    EXPECT_NEAR(tangent.x(), 1.0, 1e-6);
+    EXPECT_GT(confidence, 0.9);
+}

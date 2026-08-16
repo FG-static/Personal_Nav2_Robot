@@ -114,6 +114,10 @@ void MyHybridAStarPlanner::configure(
         };
 
     declare_double_param("unknown_cost", params_.unknown_cost, params_.unknown_cost);
+    declare_bool_param(
+        "treat_unknown_as_free",
+        params_.treat_unknown_as_free,
+        params_.treat_unknown_as_free);
     declare_double_param(
         "interpolation_resolution",
         params_.interpolation_resolution,
@@ -1683,9 +1687,11 @@ bool MyHybridAStarPlanner::computeGridHeuristic(
             const double step_cost = (offset[0] == 0 || offset[1] == 0) ? 1.0 : std::sqrt(2.0);
 
             double obstacle_cost = 0.0;
-            if (cost == nav2_costmap_2d::NO_INFORMATION)
-                obstacle_cost = params_.unknown_cost;
-            else {
+            if (cost == nav2_costmap_2d::NO_INFORMATION) {
+
+                obstacle_cost =
+                    params_.treat_unknown_as_free ? 0.0 : params_.unknown_cost;
+            } else {
 
                 obstacle_cost = params_.obstacle_cost_weight *
                     static_cast<double>(cost) /
@@ -1868,7 +1874,8 @@ bool MyHybridAStarPlanner::simulatePrimitive(
         const unsigned char cost = costmap_->getCost(mx, my);
         if (cost == nav2_costmap_2d::NO_INFORMATION) {
 
-            transition_cost += params_.unknown_cost;
+            if (!params_.treat_unknown_as_free)
+                transition_cost += params_.unknown_cost;
         } else {
 
             transition_cost += params_.obstacle_cost_weight *

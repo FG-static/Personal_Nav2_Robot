@@ -402,10 +402,10 @@ global_costmap:
   global_costmap:
     ros__parameters:
       rolling_window: true
-      # 12m 涵洞场景下给 rolling window 足够大的覆盖范围，
+      # 24m 涵洞场景下给 rolling window 足够大的覆盖范围，
       # 否则机器人站在一端时目标点可能落在 global costmap 之外。
-      width: 30
-      height: 30
+      width: 50
+      height: 50
       use_sim_time: True
       update_frequency: 1.0
       publish_frequency: 1.0
@@ -465,6 +465,7 @@ planner_server:
     AStar:
       plugin: "my_nav2_planner/MyAStarPlanner"
       unknown_cost: 5.0
+      treat_unknown_as_free: true
       interpolation_resolution: 0.1
     RRTStar:
       plugin: "my_rrtstar_planner/MyRRTStarPlanner"
@@ -476,9 +477,11 @@ planner_server:
       collision_check_resolution: 0.02
       max_iterations_after_goal: 1000
       allow_unknown: true
+      treat_unknown_as_free: true
     HybridAStar:
       plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
       unknown_cost: 5.0
+      treat_unknown_as_free: true
       interpolation_resolution: 0.1
       max_iterations: 80000
       primitive_duration: 0.25

@@ -71,6 +71,7 @@ namespace my_rrtstar_planner {
         int max_iterations_ = 50000; // 最大迭代次数
         int max_iterations_after_goal_ = 1000; // 在找到目标后继续迭代以优化路径的次数
         bool allow_unknown_ = true;
+        bool treat_unknown_as_free_ = false;
         double 
             search_radius_ = 2.0, // 用于重连
             goal_sample_rate_ = 0.1, // 采样直接采中目标的概率

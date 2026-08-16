@@ -10,6 +10,9 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -43,15 +46,30 @@ ament_target_dependencies(${PROJECT_NAME}_geometry
     Eigen3
 )
 
+add_library(${PROJECT_NAME}_timing
+    src/pointcloud_timing.cpp
+)
+target_include_directories(${PROJECT_NAME}_timing PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(${PROJECT_NAME}_timing
+    rclcpp
+    sensor_msgs
+)
+
 add_executable(tunnel_guidance_node
     src/tunnel_guidance_node.cpp
 )
 target_link_libraries(tunnel_guidance_node
     ${PROJECT_NAME}_geometry
+    ${PROJECT_NAME}_timing
     ${PCL_LIBRARIES}
 )
 ament_target_dependencies(tunnel_guidance_node
     rclcpp
+    rclcpp_action
+    nav2_msgs
     sensor_msgs
     geometry_msgs
     nav_msgs
@@ -60,11 +78,15 @@ ament_target_dependencies(tunnel_guidance_node
     tf2
     tf2_ros
     tf2_eigen
+    tf2_geometry_msgs
     pcl_conversions
     Eigen3
 )
 
-install(TARGETS tunnel_guidance_node ${PROJECT_NAME}_geometry
+install(TARGETS
+    tunnel_guidance_node
+    ${PROJECT_NAME}_geometry
+    ${PROJECT_NAME}_timing
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -78,8 +100,8 @@ install(DIRECTORY config launch
 )
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME}_geometry)
-ament_export_dependencies(rclcpp sensor_msgs geometry_msgs nav_msgs std_msgs visualization_msgs tf2 tf2_ros tf2_eigen pcl_conversions Eigen3)
+ament_export_libraries(${PROJECT_NAME}_geometry ${PROJECT_NAME}_timing)
+ament_export_dependencies(rclcpp rclcpp_action nav2_msgs sensor_msgs geometry_msgs nav_msgs std_msgs visualization_msgs tf2 tf2_ros tf2_eigen tf2_geometry_msgs pcl_conversions Eigen3)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
@@ -89,6 +111,15 @@ if(BUILD_TESTING)
     if(TARGET test_tunnel_geometry_estimator)
         target_link_libraries(test_tunnel_geometry_estimator ${PROJECT_NAME}_geometry)
         target_include_directories(test_tunnel_geometry_estimator PRIVATE include)
+    endif()
+
+    ament_add_gtest(test_pointcloud_timing
+        test/test_pointcloud_timing.cpp
+    )
+    if(TARGET test_pointcloud_timing)
+        target_link_libraries(test_pointcloud_timing ${PROJECT_NAME}_timing)
+        target_include_directories(test_pointcloud_timing PRIVATE include)
+        ament_target_dependencies(test_pointcloud_timing sensor_msgs)
     endif()
 endif()
 
