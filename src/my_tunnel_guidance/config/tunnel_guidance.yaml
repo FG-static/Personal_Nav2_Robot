@@ -34,6 +34,8 @@ tunnel_guidance:
         auto_goal_frame_id: map
         min_goal_send_interval: 1.0
         goal_moved_resend_distance: 0.5
+        auto_goal_candidate_count: 4
+        auto_goal_candidate_spacing: 1.0
 
         # Initial calibration and wall model
         init_required_frames: 3

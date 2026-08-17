@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <sys/types.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #include "my_tunnel_guidance/tunnel_geometry_estimator.hpp"
 #include "my_tunnel_guidance/tunnel_types.hpp"
@@ -25,12 +27,12 @@
 namespace my_tunnel_guidance {
 
 class TunnelGuidanceNode : public rclcpp::Node {
-    
+
 public:
-    
+
     explicit TunnelGuidanceNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 private:
-    
+
     using NavigateToPose = nav2_msgs::action::NavigateToPose;
     using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
 
@@ -74,8 +76,12 @@ private:
     bool updateWallModel(const TunnelFrameEstimate & output_frame);
 
     void maybeSendAutoGoal();
-    void autoGoalResponseCallback(const GoalHandleNavigateToPose::SharedPtr & goal_handle);
-    void autoGoalResultCallback(const GoalHandleNavigateToPose::WrappedResult & result);
+    void autoGoalResponseCallback(
+        const GoalHandleNavigateToPose::SharedPtr & goal_handle,
+        uint8_t seq);
+    void autoGoalResultCallback(
+        const GoalHandleNavigateToPose::WrappedResult & result,
+        uint8_t seq);
     bool transformGoalToMap(
         const geometry_msgs::msg::PoseStamped & input,
         geometry_msgs::msg::PoseStamped & output) const;
@@ -148,6 +154,11 @@ private:
     geometry_msgs::msg::PoseStamped latest_auto_goal_;
     geometry_msgs::msg::PoseStamped last_sent_auto_goal_;
     rclcpp::Time last_auto_goal_send_time_{0, 0, RCL_ROS_TIME};
+    uint8_t auto_goal_seq_ = 0;
+    uint8_t active_auto_goal_seq_ = 0;
+    int auto_goal_candidate_count_ = 4;
+    double auto_goal_candidate_spacing_ = 1.0;
+    int auto_goal_candidate_index_ = 0;
 };
 
 }  // namespace my_tunnel_guidance

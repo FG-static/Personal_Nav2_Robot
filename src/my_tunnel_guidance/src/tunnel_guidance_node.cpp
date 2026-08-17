@@ -51,6 +51,14 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
     goal_moved_resend_distance_ = declare_parameter("goal_moved_resend_distance", 0.5);
+    auto_goal_candidate_count_ =
+        declare_parameter(
+            "auto_goal_candidate_count",
+            4);
+    auto_goal_candidate_spacing_ =
+        declare_parameter(
+            "auto_goal_candidate_spacing",
+            1.0);
 
     geometry_params_.min_ground_points =
         declare_parameter("min_ground_points", 100);
@@ -589,10 +597,17 @@ void TunnelGuidanceNode::publishResults(
 
     geometry_msgs::msg::PoseStamped goal;
     goal.header = path_msg.header;
+    const double auto_goal_distance =
+        lookahead_distance_ +
+        static_cast<double>(auto_goal_candidate_index_) *
+        auto_goal_candidate_spacing_;
+
     const std::size_t goal_index = std::min(
         centerline.points.size() - 1,
         static_cast<std::size_t>(
-            lookahead_distance_ / geometry_params_.centerline_point_spacing));
+            std::llround(
+                auto_goal_distance /
+                geometry_params_.centerline_point_spacing)));
     goal.pose = path_msg.poses[goal_index].pose;
     local_goal_pub_->publish(goal);
 
@@ -670,8 +685,8 @@ void TunnelGuidanceNode::publishResults(
 void TunnelGuidanceNode::maybeSendAutoGoal() {
 
     if (!enable_auto_goal_ || !auto_goal_client_ ||
-        !wall_model_.initialized || !has_latest_auto_goal_ ||
-        waiting_for_auto_goal_result_) {
+        !wall_model_.initialized || !has_latest_auto_goal_
+    ) {
 
         return;
     }
@@ -713,12 +728,24 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
     action_goal.pose = goal_in_map;
     action_goal.behavior_tree = "";
 
+    const uint64_t seq = ++ auto_goal_seq_;
+    active_auto_goal_seq_ = seq;
+
     auto send_goal_options =
         rclcpp_action::Client<NavigateToPose>::SendGoalOptions();
     send_goal_options.goal_response_callback =
-        std::bind(&TunnelGuidanceNode::autoGoalResponseCallback, this, std::placeholders::_1);
+        [this, seq](
+            const GoalHandleNavigateToPose::SharedPtr & goal_handle
+        ) {
+            autoGoalResponseCallback(goal_handle, seq);
+        };
+
     send_goal_options.result_callback =
-        std::bind(&TunnelGuidanceNode::autoGoalResultCallback, this, std::placeholders::_1);
+        [this, seq](
+            const GoalHandleNavigateToPose::WrappedResult & result
+        ) {
+            autoGoalResultCallback(result, seq);
+        };
 
     last_sent_auto_goal_ = latest_auto_goal_;
     has_sent_auto_goal_ = true;
@@ -739,8 +766,11 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 }
 
 void TunnelGuidanceNode::autoGoalResponseCallback(
-    const GoalHandleNavigateToPose::SharedPtr & goal_handle
+    const GoalHandleNavigateToPose::SharedPtr & goal_handle,
+    uint8_t seq
 ) {
+
+    if (seq != active_auto_goal_seq_) return;
 
     if (!goal_handle) {
 
@@ -751,8 +781,17 @@ void TunnelGuidanceNode::autoGoalResponseCallback(
 }
 
 void TunnelGuidanceNode::autoGoalResultCallback(
-    const GoalHandleNavigateToPose::WrappedResult & result
+    const GoalHandleNavigateToPose::WrappedResult & result,
+    uint8_t seq
 ) {
+
+    if (seq != active_auto_goal_seq_) {
+
+        RCLCPP_DEBUG(
+            get_logger(),
+            "Ignoring result of preempted auto goal");
+        return;
+    }
 
     waiting_for_auto_goal_result_ = false;
     switch (result.code) {
