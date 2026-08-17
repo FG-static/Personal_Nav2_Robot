@@ -29,7 +29,7 @@ namespace my_nav2_planner {
             const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent,
             std::string name, std::shared_ptr<tf2_ros::Buffer> /*tf*/,
             std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros) override;
-    
+
         void activate() override;
         void deactivate() override;
         void cleanup() override;
@@ -48,6 +48,7 @@ namespace my_nav2_planner {
         bool treat_unknown_as_free_ = false;
         rclcpp::Publisher<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_pub_;
         std::uint64_t replan_event_id_ = 0;
+        int cost_threshold_ = 250; // 0 < x <= 253
     };
 } // namespace my_nav2_planner
 

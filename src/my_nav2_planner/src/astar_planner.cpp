@@ -35,6 +35,10 @@ namespace my_nav2_planner {
         nav2_util::declare_parameter_if_not_declared(
             node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(0.1));
         node_->get_parameter(name_ + ".interpolation_resolution", interpolation_resolution_);
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name_ + ".cost_threshold", rclcpp::ParameterValue(250));
+        node_->get_parameter(name_ + ".cost_threshold", cost_threshold_);
+        cost_threshold_ = std::clamp(cost_threshold_, 0, 253);
 
         //RCLCPP_INFO(node_->get_logger(), "自定义A*规划器配置完成");
     }
@@ -110,7 +114,7 @@ namespace my_nav2_planner {
         }
 
         // 路径规划
-        int width = costmap_->getSizeInCellsX(), 
+        int width = costmap_->getSizeInCellsX(),
             height = costmap_->getSizeInCellsY();
         int map_size = width * height;
         std::vector<double> g_values(map_size, std::numeric_limits<double>::max()); // 从起点到每个节点的实际代价
@@ -161,7 +165,8 @@ namespace my_nav2_planner {
                     unsigned char cost = costmap_->getCost(nx, ny);
 
                     // 障碍物仍然不可通行；未知区域根据开关决定是否与自由区域完全等价。
-                    if (cost >= nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE &&
+                    // 超过阈值的成本视为障碍物，未知区域根据开关决定是否与自由区域完全等价。
+                    if (cost >= cost_threshold_ &&
                         cost != nav2_costmap_2d::NO_INFORMATION)
                         continue;
 
@@ -182,7 +187,7 @@ namespace my_nav2_planner {
                         g_values[next_idx] = tentative_g;
                         parent_map[next_idx] = cur_idx;
 
-                        double h_cost = std::sqrt(std::pow(nx - (int)mx_goal, 2) + 
+                        double h_cost = std::sqrt(std::pow(nx - (int)mx_goal, 2) +
                                         std::pow(ny - (int)my_goal, 2));
                         open_list.push({tentative_g + h_cost, next_idx});
                         open_peak = std::max(open_peak, open_list.size());
