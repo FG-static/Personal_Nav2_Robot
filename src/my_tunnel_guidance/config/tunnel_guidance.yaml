@@ -44,6 +44,12 @@ tunnel_guidance:
         wall_model_update_alpha: 0.1
         wall_position_jump_limit: 0.3
 
+        # Simple exit detection based on current wall and ground point support
+        exit_detection_enabled: true
+        exit_confirm_frames: 5
+        exit_max_wall_points: 60
+        exit_min_ground_points: 100
+
         # Temporal stability
         filter_new_measurement_weight: 0.2
         valid_frame_count: 3

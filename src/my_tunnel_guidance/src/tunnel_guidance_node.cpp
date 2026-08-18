@@ -47,6 +47,22 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     wall_position_jump_limit_ = declare_parameter("wall_position_jump_limit", 0.3);
     init_required_frames_ = declare_parameter("init_required_frames", 3);
     ground_band_ = declare_parameter("ground_band", 0.15);
+    exit_detection_enabled_ = declare_parameter("exit_detection_enabled", true);
+    exit_confirm_frames_ = declare_parameter("exit_confirm_frames", 5);
+    exit_max_wall_points_ = declare_parameter("exit_max_wall_points", 60);
+    exit_min_ground_points_ = declare_parameter("exit_min_ground_points", 100);
+    if (exit_confirm_frames_ < 1) {
+
+        exit_confirm_frames_ = 1;
+    }
+    if (exit_max_wall_points_ < 1) {
+
+        exit_max_wall_points_ = 1;
+    }
+    if (exit_min_ground_points_ < 1) {
+
+        exit_min_ground_points_ = 1;
+    }
     enable_auto_goal_ = declare_parameter("enable_auto_goal", false);
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
@@ -88,12 +104,18 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         "~/markers", rclcpp::QoS(1));
     valid_pub_ = create_publisher<std_msgs::msg::Bool>("~/valid", rclcpp::QoS(1));
+    exit_detected_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "~/exit_detected", rclcpp::QoS(1).reliable().transient_local());
     left_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/left_points", rclcpp::SensorDataQoS());
     right_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/right_points", rclcpp::SensorDataQoS());
     ground_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/ground_points", rclcpp::SensorDataQoS());
+
+    std_msgs::msg::Bool exit_msg;
+    exit_msg.data = false;
+    exit_detected_pub_->publish(exit_msg);
 
     if (enable_auto_goal_) {
 
@@ -515,6 +537,40 @@ void TunnelGuidanceNode::pointCloudCallback(
 
         const TunnelFrameEstimate observed_frame =
             estimator_.estimateFrame(left_points, right_points, ground_points);
+
+        // 出口处通常仍能看到地面，但左右墙体点会明显减少；连续多帧确认后锁存状态。
+        if (exit_detection_enabled_) {
+
+            const bool ground_is_present =
+                ground_points.size() >= static_cast<std::size_t>(exit_min_ground_points_);
+            const bool wall_observation_invalid =
+                !observed_frame.valid ||
+                left_points.size() < static_cast<std::size_t>(exit_max_wall_points_) ||
+                right_points.size() < static_cast<std::size_t>(exit_max_wall_points_);
+            const bool exit_candidate = ground_is_present && wall_observation_invalid;
+
+            if (exit_candidate) {
+
+                ++exit_candidate_frames_;
+            } else {
+
+                exit_candidate_frames_ = 0;
+            }
+
+            if (!exit_detected_ && exit_candidate_frames_ >= exit_confirm_frames_) {
+
+                exit_detected_ = true;
+                RCLCPP_WARN(
+                    get_logger(),
+                    "Tunnel exit detected after %d consecutive candidate frames",
+                    exit_candidate_frames_);
+            }
+        }
+
+        std_msgs::msg::Bool exit_msg;
+        exit_msg.data = exit_detected_;
+        exit_detected_pub_->publish(exit_msg);
+
         if (!observed_frame.valid) {
 
             consecutive_valid_ = 0;

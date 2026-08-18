@@ -103,6 +103,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_goal_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr valid_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr exit_detected_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr left_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr right_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_points_pub_;
@@ -131,6 +132,10 @@ private:
     double wall_position_jump_limit_ = 0.3;
     int init_required_frames_ = 3;
     double ground_band_ = 0.15;
+    bool exit_detection_enabled_ = true;
+    int exit_confirm_frames_ = 5;
+    int exit_max_wall_points_ = 60;
+    int exit_min_ground_points_ = 100;
     bool enable_auto_goal_ = false;
     std::string auto_goal_frame_id_ = "map";
     double min_goal_send_interval_ = 1.0;
@@ -138,6 +143,8 @@ private:
 
     TunnelWallModel wall_model_;
     int calibration_valid_frames_ = 0;
+    int exit_candidate_frames_ = 0;
+    bool exit_detected_ = false;
 
     bool has_last_result_ = false;
     rclcpp::Time last_valid_time_{0, 0, RCL_ROS_TIME};
