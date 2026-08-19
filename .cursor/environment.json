@@ -1,0 +1,8 @@
+{
+  "name": "ROS 2 Humble (Ubuntu 22.04) - humble branch",
+  "user": "ubuntu",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "install": "sudo apt-get update -qq || true\nrosdep install --from-paths src --ignore-src -r -y --rosdistro humble --skip-keys \"small_gicp sophus gz_sim_vendor gz_plugin_vendor ros_gz_bridge ros_gz_sim opencv2 osqp behaviortree_cpp libg2o-dev\" || true"
+}
