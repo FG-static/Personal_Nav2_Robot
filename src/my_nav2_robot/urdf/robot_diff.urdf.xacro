@@ -1,8 +1,10 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="my_nav2_bot">
 
-    <!-- 差速底盘变体：Gazebo 用 DiffDrive 吃 /cmd_vel 的 vx + wz。
-         odom -> base_footprint 仍由 BIEVR-LIO 发布，本文件不发布导航用轮式 TF。 -->
+    <xacro:arg name="use_gazebo_odom_tf" default="false"/>
+
+    <!-- 差速底盘变体：Gazebo Classic 用 diff_drive 吃 /cmd_vel 的 vx + wz。
+         odom -> base_footprint 仅在 use_gazebo_odom_tf:=true 时由插件发布。 -->
 
     <!--机器人身体-->
     <xacro:property name="chassis_length" value="0.4"/>
@@ -226,9 +228,7 @@
 
     <!-- Mid360 CSV scan pattern with per-point timestamps for the LIO frontend. -->
     <gazebo>
-        <plugin
-            filename="libmy_nav2_robot_mid360_gz_plugin.so"
-            name="my_nav2_robot::Mid360GzPlugin">
+        <plugin name="mid360" filename="libmy_nav2_robot_mid360_gz_plugin.so">
             <tracking_link_name>livox_frame</tracking_link_name>
             <sensor_pose>0 0 0 0 0 0</sensor_pose>
             <frame_id>livox_frame</frame_id>
@@ -247,11 +247,9 @@
 
     <!--深度相机插件-->
     <!-- <gazebo reference="camera_link">
-        <sensor name="depth_camera" type="rgbd_camera">
+        <sensor name="depth_camera" type="depth">
             <visualize>true</visualize>
-            <update_rate>10.0</update_rate> <!- 原10hz，到时候再改回来 ->
-            <topic>depth_camera</topic>
-            <gz_frame_id>camera_link</gz_frame_id>
+            <update_rate>10.0</update_rate>
             <camera>
                 <horizontal_fov>1.047198</horizontal_fov>
                 <image>
@@ -264,53 +262,53 @@
                     <far>5.0</far>
                 </clip>
             </camera>
+            <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+                <frame_name>camera_link</frame_name>
+            </plugin>
         </sensor>
     </gazebo> -->
 
-    <!-- 四轮差速：同侧前后轮并联。只响应 linear.x / angular.z。
-         轮式里程计发到 /wheel_odom、/wheel_tf，不占用 /tf，避免和 BIEVR-LIO 抢 odom TF。 -->
+    <!-- 四轮差速：同侧前后轮并联。第一轮只驱动前轮；后轮随动。
+         轮式里程计发到 /wheel_odom。publish_odom_tf 由 use_gazebo_odom_tf 控制。 -->
     <gazebo>
-        <plugin
-            filename="gz-sim-diff-drive-system"
-            name="gz::sim::systems::DiffDrive">
+        <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
+            <ros>
+                <remapping>cmd_vel:=cmd_vel</remapping>
+                <remapping>odom:=wheel_odom</remapping>
+            </ros>
             <left_joint>front_left_wheel_joint</left_joint>
             <right_joint>front_right_wheel_joint</right_joint>
-            <left_joint>rear_left_wheel_joint</left_joint>
-            <right_joint>rear_right_wheel_joint</right_joint>
-
             <wheel_separation>${wheel_separation}</wheel_separation>
-            <wheel_radius>${wheel_radius}</wheel_radius>
-
-            <max_linear_velocity>1.0</max_linear_velocity>
-            <max_angular_velocity>1.5</max_angular_velocity>
-            <max_linear_acceleration>2.5</max_linear_acceleration>
-            <max_angular_acceleration>3.2</max_angular_acceleration>
-
-            <topic>/cmd_vel</topic>
-            <odom_topic>/wheel_odom</odom_topic>
-            <tf_topic>/wheel_tf</tf_topic>
-        </plugin>
-
-        <plugin
-            filename="gz-sim-joint-state-publisher-system"
-            name="gz::sim::systems::JointStatePublisher">
-            <topic>/joint_states</topic>
-        </plugin>
-    </gazebo>
-
-    <gazebo>
-        <plugin
-            filename="gz-sim-odometry-publisher-system"
-            name="gz::sim::systems::OdometryPublisher">
-            <odom_topic>/ground_truth</odom_topic>  <!-- Ground truth is retained only for evaluation. -->
-            <odom_frame>odom</odom_frame>
+            <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
+            <max_wheel_torque>50</max_wheel_torque>
+            <max_wheel_acceleration>3.0</max_wheel_acceleration>
+            <command_topic>cmd_vel</command_topic>
+            <odometry_topic>wheel_odom</odometry_topic>
+            <publish_odom>true</publish_odom>
+            <publish_odom_tf>$(arg use_gazebo_odom_tf)</publish_odom_tf>
+            <publish_wheel_tf>false</publish_wheel_tf>
+            <odometry_frame>odom</odometry_frame>
             <robot_base_frame>base_footprint</robot_base_frame>
-            <!-- SLAM 模式下由 ros_gz_bridge 将 gz /tf 桥接到 ROS /tf， -->
-            <!-- 给 slam_toolbox 提供 odom -> base_footprint。 -->
-            <!-- 导航模式下不桥接该 TF，避免和外部 BIEVR-LIO 冲突。 -->
-            <tf_topic>/tf</tf_topic>
-            <dimensions>3</dimensions>
-            <odom_publish_frequency>200</odom_publish_frequency>
+        </plugin>
+        <plugin name="joint_state_publisher" filename="libgazebo_ros_joint_state_publisher.so">
+            <ros>
+                <remapping>joint_states:=joint_states</remapping>
+            </ros>
+            <update_rate>50</update_rate>
+            <joint_name>front_left_wheel_joint</joint_name>
+            <joint_name>front_right_wheel_joint</joint_name>
+            <joint_name>rear_left_wheel_joint</joint_name>
+            <joint_name>rear_right_wheel_joint</joint_name>
+        </plugin>
+        <plugin name="p3d_ground_truth" filename="libgazebo_ros_p3d.so">
+            <ros>
+                <remapping>odom:=ground_truth</remapping>
+            </ros>
+            <body_name>base_link</body_name>
+            <frame_name>world</frame_name>
+            <update_rate>200.0</update_rate>
+            <xyz_offset>0 0 0</xyz_offset>
+            <rpy_offset>0 0 0</rpy_offset>
         </plugin>
     </gazebo>
 </robot>

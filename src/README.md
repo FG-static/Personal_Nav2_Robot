@@ -1,6 +1,6 @@
 # 基于$\text{Nav2}$的一个机器人仿真项目
 ## 环境要求
-`humble` 分支在 **Ubuntu 22.04 + ROS 2 Humble** 上构建。上游 `main` 仍是 Ubuntu 24.04 + ROS 2 Jazzy。推荐用 rosdep 补依赖。仿真后端（Gazebo Classic 或 Ignition Fortress）见 [`HUMBLE_PORTING.md`](HUMBLE_PORTING.md)；Nav2 / 行为树 / yaml 的共用改动两边都要用。
+`humble` 分支在 **Ubuntu 22.04 + ROS 2 Humble** 上构建，仿真走 **方案 A：Gazebo Classic 11 + `gazebo_ros`**（见 [`HUMBLE_PORTING.md`](HUMBLE_PORTING.md) 第 3 节）。上游 `main` 仍是 Ubuntu 24.04 + ROS 2 Jazzy + Gazebo Harmonic。推荐用 rosdep 补依赖。
 
 额外依赖（2D 扫描由 Mid360 点云投影生成，不再使用独立 2D 雷达）：
 
@@ -41,5 +41,9 @@ rosdep install --from-paths src --ignore-src -r -y
 刷新系统环境，以下命令简单启动项目：
 ```bash
 ros2 launch my_nav2_robot full_navigation.launch.py
+```
+无头仿真（不启 gzclient / 可用 `use_gazebo_odom_tf:=true` 先验证里程计 TF）：
+```bash
+ros2 launch my_nav2_robot gazebo_sim.launch.py gui:=false use_gazebo_odom_tf:=true scene:=culvert
 ```
 同时，还可以使用`slam`参数在运行launch文件时设置是否打开slam模式

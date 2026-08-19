@@ -1,1 +1,2 @@
-prepend-non-duplicate;GZ_SIM_SYSTEM_PLUGIN_PATH;lib
+prepend-non-duplicate;GAZEBO_PLUGIN_PATH;lib
+prepend-non-duplicate;GAZEBO_MODEL_PATH;share/my_nav2_robot/models

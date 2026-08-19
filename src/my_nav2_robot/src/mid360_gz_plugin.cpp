@@ -2,23 +2,16 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <sstream>
 #include <utility>
 
-#include <gz/plugin/Register.hh>
-#include <gz/sim/Util.hh>
-#include <gz/sim/components/Collision.hh>
-#include <gz/sim/components/Geometry.hh>
-#include <gz/sim/components/ParentEntity.hh>
-#include <sdf/Box.hh>
-#include <sdf/Cylinder.hh>
-#include <sdf/Geometry.hh>
-#include <sdf/Plane.hh>
-#include <sdf/Sphere.hh>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <boost/pointer_cast.hpp>
+#include <gazebo/common/Console.hh>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 namespace my_nav2_robot {
@@ -29,7 +22,7 @@ constexpr double kIntersectionEpsilon = 1.0e-9;
 
 template<typename T>
 T getSdfValue(
-    const std::shared_ptr<const sdf::Element> &sdf,
+    const sdf::ElementPtr &sdf,
     const std::string &name,
     const T &default_value)
 {
@@ -57,14 +50,14 @@ Mid360GzPlugin::Mid360GzPlugin() = default;
 
 Mid360GzPlugin::~Mid360GzPlugin() = default;
 
-void Mid360GzPlugin::Configure(
-    const gz::sim::Entity &entity,
-    const std::shared_ptr<const sdf::Element> &sdf,
-    gz::sim::EntityComponentManager &ecm,
-    gz::sim::EventManager & /*event_manager*/)
+void Mid360GzPlugin::Load(gazebo::physics::ModelPtr model, sdf::ElementPtr sdf)
 {
-    model_entity_ = entity;
-    model_ = gz::sim::Model(model_entity_);
+    model_ = model;
+    if (!model_) {
+        gzerr << "[Mid360GzPlugin] Load() received a null model" << std::endl;
+        return;
+    }
+    world_ = model_->GetWorld();
 
     tracking_link_name_ = getSdfValue(sdf, "tracking_link_name", tracking_link_name_);
     frame_id_ = getSdfValue(sdf, "frame_id", frame_id_);
@@ -95,34 +88,70 @@ void Mid360GzPlugin::Configure(
     random_engine_.seed(static_cast<std::mt19937::result_type>(noise_seed_));
     range_noise_ = std::normal_distribution<double>(0.0, range_noise_stddev_);
 
-    tracking_link_entity_ = model_.LinkByName(ecm, tracking_link_name_);
-    if (tracking_link_entity_ == gz::sim::kNullEntity) {
+    tracking_link_ = model_->GetLink(tracking_link_name_);
+    if (!tracking_link_) {
         gzerr << "[Mid360GzPlugin] Cannot find tracking link '"
               << tracking_link_name_ << "'" << std::endl;
         return;
     }
 
-    if (!loadScanPattern(csv_file_name_)) {
+    const std::string resolved_csv = resolveCsvPath(csv_file_name_);
+    if (!loadScanPattern(resolved_csv)) {
         gzerr << "[Mid360GzPlugin] Cannot load scan pattern '"
-              << csv_file_name_ << "'" << std::endl;
+              << csv_file_name_ << "' (resolved '" << resolved_csv << "')"
+              << std::endl;
         return;
     }
 
-    if (!rclcpp::ok()) {
-        int argc = 0;
-        char **argv = nullptr;
-        rclcpp::init(argc, argv);
+    node_ = gazebo_ros::Node::Get(sdf);
+    if (!node_) {
+        gzerr << "[Mid360GzPlugin] gazebo_ros::Node::Get() returned null"
+              << std::endl;
+        return;
     }
-
-    node_ = std::make_shared<rclcpp::Node>(
-        "mid360_gz_plugin_" + std::to_string(model_entity_));
     pointcloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
         topic_, rclcpp::SensorDataQoS());
+
+    update_connection_ = gazebo::event::Events::ConnectWorldUpdateBegin(
+        std::bind(&Mid360GzPlugin::OnUpdate, this, std::placeholders::_1));
 
     RCLCPP_INFO(
         node_->get_logger(),
         "Loaded %zu Mid360 rays; publishing %s at %.1f Hz with frame %s",
         scan_pattern_.size(), topic_.c_str(), update_rate_, frame_id_.c_str());
+}
+
+std::string Mid360GzPlugin::resolveCsvPath(const std::string &file_name) const
+{
+    if (!file_name.empty()) {
+        std::ifstream direct(file_name);
+        if (direct.good()) {
+            return file_name;
+        }
+    }
+
+    const std::string package_uri = "package://my_nav2_robot/";
+    if (file_name.rfind(package_uri, 0) == 0) {
+        try {
+            const std::string share =
+                ament_index_cpp::get_package_share_directory("my_nav2_robot");
+            return share + "/" + file_name.substr(package_uri.size());
+        } catch (const std::exception &) {
+        }
+    }
+
+    try {
+        const std::string share =
+            ament_index_cpp::get_package_share_directory("my_nav2_robot");
+        const std::string candidate = share + "/config/mid360.csv";
+        std::ifstream share_file(candidate);
+        if (share_file.good()) {
+            return candidate;
+        }
+    } catch (const std::exception &) {
+    }
+
+    return file_name;
 }
 
 bool Mid360GzPlugin::loadScanPattern(const std::string &file_name)
@@ -175,77 +204,70 @@ bool Mid360GzPlugin::loadScanPattern(const std::string &file_name)
     return !scan_pattern_.empty();
 }
 
-bool Mid360GzPlugin::isModelDescendant(
-    gz::sim::Entity entity,
-    const gz::sim::EntityComponentManager &ecm) const
-{
-    while (entity != gz::sim::kNullEntity) {
-        if (entity == model_entity_) {
-            return true;
-        }
-        const auto *parent = ecm.Component<gz::sim::components::ParentEntity>(entity);
-        if (parent == nullptr) {
-            return false;
-        }
-        entity = parent->Data();
-    }
-    return false;
-}
-
 std::vector<Mid360GzPlugin::CollisionPrimitive>
-Mid360GzPlugin::collectCollisionPrimitives(
-    const gz::sim::EntityComponentManager &ecm)
+Mid360GzPlugin::collectCollisionPrimitives()
 {
     std::vector<CollisionPrimitive> collisions;
     std::size_t unsupported_geometry_count = 0U;
+    if (!world_) {
+        return collisions;
+    }
 
-    ecm.Each<gz::sim::components::Collision>(
-        [&](const gz::sim::Entity &entity, const gz::sim::components::Collision *) {
-            if (isModelDescendant(entity, ecm)) {
-                return true;
+    for (const gazebo::physics::ModelPtr &world_model : world_->Models()) {
+        if (!world_model || world_model == model_) {
+            continue;
+        }
+
+        for (const gazebo::physics::LinkPtr &link : world_model->GetLinks()) {
+            if (!link) {
+                continue;
             }
+            for (const gazebo::physics::CollisionPtr &collision : link->GetCollisions()) {
+                if (!collision) {
+                    continue;
+                }
+                const gazebo::physics::ShapePtr shape = collision->GetShape();
+                if (!shape) {
+                    continue;
+                }
 
-            const auto *geometry_component =
-                ecm.Component<gz::sim::components::Geometry>(entity);
-            if (geometry_component == nullptr) {
-                return true;
+                CollisionPrimitive primitive;
+                primitive.pose = collision->WorldPose();
+
+                if (const auto box =
+                    boost::dynamic_pointer_cast<gazebo::physics::BoxShape>(shape))
+                {
+                    primitive.type = PrimitiveType::kBox;
+                    primitive.size = box->Size();
+                    primitive.bounding_radius = 0.5 * primitive.size.Length();
+                } else if (const auto plane =
+                    boost::dynamic_pointer_cast<gazebo::physics::PlaneShape>(shape))
+                {
+                    primitive.type = PrimitiveType::kPlane;
+                    primitive.normal = plane->Normal();
+                } else if (const auto sphere =
+                    boost::dynamic_pointer_cast<gazebo::physics::SphereShape>(shape))
+                {
+                    primitive.type = PrimitiveType::kSphere;
+                    primitive.radius = sphere->GetRadius();
+                    primitive.bounding_radius = primitive.radius;
+                } else if (const auto cylinder =
+                    boost::dynamic_pointer_cast<gazebo::physics::CylinderShape>(shape))
+                {
+                    primitive.type = PrimitiveType::kCylinder;
+                    primitive.radius = cylinder->GetRadius();
+                    primitive.length = cylinder->GetLength();
+                    primitive.bounding_radius = std::hypot(
+                        primitive.radius, 0.5 * primitive.length);
+                } else {
+                    ++unsupported_geometry_count;
+                    continue;
+                }
+
+                collisions.push_back(primitive);
             }
-
-            const sdf::Geometry &geometry = geometry_component->Data();
-            CollisionPrimitive primitive;
-            primitive.pose = gz::sim::worldPose(entity, ecm);
-
-            if (geometry.Type() == sdf::GeometryType::BOX && geometry.BoxShape()) {
-                primitive.type = PrimitiveType::kBox;
-                primitive.size = geometry.BoxShape()->Size();
-                primitive.bounding_radius = 0.5 * primitive.size.Length();
-            } else if (
-                geometry.Type() == sdf::GeometryType::PLANE && geometry.PlaneShape())
-            {
-                primitive.type = PrimitiveType::kPlane;
-                primitive.normal = geometry.PlaneShape()->Normal();
-            } else if (
-                geometry.Type() == sdf::GeometryType::SPHERE && geometry.SphereShape())
-            {
-                primitive.type = PrimitiveType::kSphere;
-                primitive.radius = geometry.SphereShape()->Radius();
-                primitive.bounding_radius = primitive.radius;
-            } else if (
-                geometry.Type() == sdf::GeometryType::CYLINDER && geometry.CylinderShape())
-            {
-                primitive.type = PrimitiveType::kCylinder;
-                primitive.radius = geometry.CylinderShape()->Radius();
-                primitive.length = geometry.CylinderShape()->Length();
-                primitive.bounding_radius = std::hypot(
-                    primitive.radius, 0.5 * primitive.length);
-            } else {
-                ++unsupported_geometry_count;
-                return true;
-            }
-
-            collisions.push_back(primitive);
-            return true;
-        });
+        }
+    }
 
     if (unsupported_geometry_count > 0U && !warned_unsupported_geometry_ && node_) {
         RCLCPP_WARN(
@@ -260,15 +282,15 @@ Mid360GzPlugin::collectCollisionPrimitives(
 
 bool Mid360GzPlugin::intersectBox(
     const CollisionPrimitive &box,
-    const gz::math::Vector3d &origin,
-    const gz::math::Vector3d &direction,
+    const ignition::math::Vector3d &origin,
+    const ignition::math::Vector3d &direction,
     double &distance) const
 {
-    const gz::math::Vector3d local_origin =
+    const ignition::math::Vector3d local_origin =
         box.pose.Rot().RotateVectorReverse(origin - box.pose.Pos());
-    const gz::math::Vector3d local_direction =
+    const ignition::math::Vector3d local_direction =
         box.pose.Rot().RotateVectorReverse(direction);
-    const gz::math::Vector3d half_size = 0.5 * box.size;
+    const ignition::math::Vector3d half_size = 0.5 * box.size;
 
     const std::array<double, 3> lower = {
         -half_size.X(), -half_size.Y(), -half_size.Z()};
@@ -307,11 +329,11 @@ bool Mid360GzPlugin::intersectBox(
 
 bool Mid360GzPlugin::intersectPlane(
     const CollisionPrimitive &plane,
-    const gz::math::Vector3d &origin,
-    const gz::math::Vector3d &direction,
+    const ignition::math::Vector3d &origin,
+    const ignition::math::Vector3d &direction,
     double &distance) const
 {
-    const gz::math::Vector3d normal =
+    const ignition::math::Vector3d normal =
         plane.pose.Rot().RotateVector(plane.normal).Normalized();
     const double denominator = normal.Dot(direction);
     if (std::abs(denominator) < kIntersectionEpsilon) {
@@ -323,11 +345,11 @@ bool Mid360GzPlugin::intersectPlane(
 
 bool Mid360GzPlugin::intersectSphere(
     const CollisionPrimitive &sphere,
-    const gz::math::Vector3d &origin,
-    const gz::math::Vector3d &direction,
+    const ignition::math::Vector3d &origin,
+    const ignition::math::Vector3d &direction,
     double &distance) const
 {
-    const gz::math::Vector3d relative_origin = origin - sphere.pose.Pos();
+    const ignition::math::Vector3d relative_origin = origin - sphere.pose.Pos();
     const double projection = relative_origin.Dot(direction);
     const double constant = relative_origin.SquaredLength() -
         sphere.radius * sphere.radius;
@@ -343,13 +365,13 @@ bool Mid360GzPlugin::intersectSphere(
 
 bool Mid360GzPlugin::intersectCylinder(
     const CollisionPrimitive &cylinder,
-    const gz::math::Vector3d &origin,
-    const gz::math::Vector3d &direction,
+    const ignition::math::Vector3d &origin,
+    const ignition::math::Vector3d &direction,
     double &distance) const
 {
-    const gz::math::Vector3d local_origin =
+    const ignition::math::Vector3d local_origin =
         cylinder.pose.Rot().RotateVectorReverse(origin - cylinder.pose.Pos());
-    const gz::math::Vector3d local_direction =
+    const ignition::math::Vector3d local_direction =
         cylinder.pose.Rot().RotateVectorReverse(direction);
     const double half_length = 0.5 * cylinder.length;
     double best = std::numeric_limits<double>::infinity();
@@ -400,8 +422,8 @@ bool Mid360GzPlugin::intersectCylinder(
 }
 
 bool Mid360GzPlugin::raycast(
-    const gz::math::Vector3d &origin,
-    const gz::math::Vector3d &direction,
+    const ignition::math::Vector3d &origin,
+    const ignition::math::Vector3d &direction,
     const std::vector<CollisionPrimitive> &collisions,
     double &range) const
 {
@@ -410,7 +432,7 @@ bool Mid360GzPlugin::raycast(
 
     for (const CollisionPrimitive &collision : collisions) {
         if (collision.bounding_radius > 0.0) {
-            const gz::math::Vector3d center_offset = collision.pose.Pos() - origin;
+            const ignition::math::Vector3d center_offset = collision.pose.Pos() - origin;
             const double along_ray = center_offset.Dot(direction);
             if (along_ray + collision.bounding_radius < min_range_ ||
                 along_ray - collision.bounding_radius > nearest)
@@ -501,22 +523,21 @@ void Mid360GzPlugin::publishPointCloud(
     pointcloud_publisher_->publish(cloud);
 }
 
-void Mid360GzPlugin::PostUpdate(
-    const gz::sim::UpdateInfo &info,
-    const gz::sim::EntityComponentManager &ecm)
+void Mid360GzPlugin::OnUpdate(const gazebo::common::UpdateInfo &info)
 {
-    if (info.paused || !pointcloud_publisher_ || scan_pattern_.empty() ||
-        tracking_link_entity_ == gz::sim::kNullEntity)
+    if ((world_ && world_->IsPaused()) || !pointcloud_publisher_ ||
+        scan_pattern_.empty() || !tracking_link_)
     {
         return;
     }
 
-    const std::int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        info.simTime).count();
+    const std::int64_t now_ns =
+        static_cast<std::int64_t>(info.simTime.sec) * 1000000000LL +
+        static_cast<std::int64_t>(info.simTime.nsec);
     const std::int64_t publish_period_ns = static_cast<std::int64_t>(
         1000000000.0 / update_rate_);
-    const gz::math::Pose3d current_sensor_pose =
-        gz::sim::worldPose(tracking_link_entity_, ecm) * sensor_pose_;
+    const ignition::math::Pose3d current_sensor_pose =
+        tracking_link_->WorldPose() * sensor_pose_;
 
     if (last_publish_ns_ >= now_ns) {
         last_publish_ns_ = -1;
@@ -535,7 +556,7 @@ void Mid360GzPlugin::PostUpdate(
     const std::int64_t scan_duration_ns = now_ns - last_publish_ns_;
     const int scheduled_point_count =
         (samples_per_scan_ + downsample_ - 1) / downsample_;
-    const std::vector<CollisionPrimitive> collisions = collectCollisionPrimitives(ecm);
+    const std::vector<CollisionPrimitive> collisions = collectCollisionPrimitives();
     std::vector<PointSample> points;
     points.reserve(static_cast<std::size_t>(scheduled_point_count));
 
@@ -548,15 +569,15 @@ void Mid360GzPlugin::PostUpdate(
         const double scan_fraction = scheduled_point_count > 1 ?
             static_cast<double>(scheduled_index) /
             static_cast<double>(scheduled_point_count - 1) : 0.0;
-        const gz::math::Vector3d position = previous_sensor_pose_.Pos() +
+        const ignition::math::Vector3d position = previous_sensor_pose_.Pos() +
             (current_sensor_pose.Pos() - previous_sensor_pose_.Pos()) * scan_fraction;
-        const gz::math::Quaterniond orientation = gz::math::Quaterniond::Slerp(
+        const ignition::math::Quaterniond orientation = ignition::math::Quaterniond::Slerp(
             scan_fraction, previous_sensor_pose_.Rot(), current_sensor_pose.Rot());
-        const gz::math::Pose3d measurement_pose(position, orientation);
+        const ignition::math::Pose3d measurement_pose(position, orientation);
 
         const ScanRay &ray = scan_pattern_[static_cast<std::size_t>(
             index % static_cast<std::int64_t>(scan_pattern_.size()))];
-        const gz::math::Vector3d world_direction =
+        const ignition::math::Vector3d world_direction =
             measurement_pose.Rot().RotateVector(ray.direction).Normalized();
 
         double range = 0.0;
@@ -572,7 +593,7 @@ void Mid360GzPlugin::PostUpdate(
             continue;
         }
 
-        const gz::math::Vector3d local_point = ray.direction * range;
+        const ignition::math::Vector3d local_point = ray.direction * range;
         const std::int64_t point_offset_ns = static_cast<std::int64_t>(
             std::llround(scan_fraction * static_cast<double>(scan_duration_ns)));
         PointSample point;
@@ -602,8 +623,4 @@ void Mid360GzPlugin::PostUpdate(
 
 }  // namespace my_nav2_robot
 
-GZ_ADD_PLUGIN(
-    my_nav2_robot::Mid360GzPlugin,
-    gz::sim::System,
-    gz::sim::ISystemConfigure,
-    gz::sim::ISystemPostUpdate)
+GZ_REGISTER_MODEL_PLUGIN(my_nav2_robot::Mid360GzPlugin)

@@ -28,6 +28,7 @@ def generate_launch_description():
     ])
 
     chassis = LaunchConfiguration('chassis', default='mecanum')
+    gui = LaunchConfiguration('gui', default='true')
     nav2_params_slam_mecanum = os.path.join(
         pkg_project_bringup, 'config', 'nav2_params_slam.yaml')
     nav2_params_slam_diff = os.path.join(
@@ -84,10 +85,10 @@ def generate_launch_description():
         map_override, "'"
     ])
 
-    # gz找模型路径
-    set_gz_resource_path = SetEnvironmentVariable(
-        name='GZ_SIM_RESOURCE_PATH',
-        value=[os.path.join(pkg_project_bringup, '..')] # 指向 install/my_nav2_robot/share 这一层
+    # Gazebo Classic model path: parent of models/culvert.sdf and models/map1_obstacles.
+    set_gazebo_model_path = SetEnvironmentVariable(
+        name='GAZEBO_MODEL_PATH',
+        value=os.path.join(pkg_project_bringup, 'models')
     )
 
     # map->odom
@@ -119,6 +120,7 @@ def generate_launch_description():
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles,
             'chassis': chassis,
+            'gui': gui,
         }.items()
     )
     gazebo_sim_nav = IncludeLaunchDescription(
@@ -135,6 +137,7 @@ def generate_launch_description():
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles,
             'chassis': chassis,
+            'gui': gui,
         }.items()
     )
 
@@ -220,6 +223,11 @@ def generate_launch_description():
                 'diff uses robot_diff.urdf.xacro; with slam:=true also uses '
                 'nav2_params_slam_diff.yaml and DWA.'
             )),
+        DeclareLaunchArgument(
+            'gui',
+            default_value='true',
+            description='Run Gazebo Classic gzclient. Set false for headless tests.'),
+        set_gazebo_model_path,
         gazebo_sim_slam,
         gazebo_sim_nav,
         static_tf_node,

@@ -16,12 +16,13 @@
   <depend>tf2</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_eigen</depend>
-  <depend>gz_sim_vendor</depend>
-  <depend>gz_plugin_vendor</depend>
+  <depend>gazebo_dev</depend>
+  <depend>gazebo_ros</depend>
+  <depend>ament_index_cpp</depend>
 
   <exec_depend>robot_state_publisher</exec_depend>
-  <exec_depend>ros_gz_bridge</exec_depend>
-  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>gazebo_ros_pkgs</exec_depend>
+  <exec_depend>gazebo_plugins</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
   <exec_depend>nav2_dwb_controller</exec_depend>
