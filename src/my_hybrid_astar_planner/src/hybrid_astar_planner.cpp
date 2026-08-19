@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "nav2_core/planner_exceptions.hpp"
+#include "nav2_core/exceptions.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "std_msgs/msg/color_rgba.hpp"
@@ -320,8 +320,7 @@ void MyHybridAStarPlanner::cleanup() {
 
 nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     const geometry_msgs::msg::PoseStamped &start,
-    const geometry_msgs::msg::PoseStamped &goal,
-    std::function<bool()> cancel_checker) {
+    const geometry_msgs::msg::PoseStamped &goal) {
 
     std::lock_guard<std::mutex> lock(planning_mutex_);
     if (!node_ || !costmap_)
@@ -386,13 +385,6 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
     nav_msgs::msg::Path global_path;
     global_path.header.frame_id = global_frame_;
     global_path.header.stamp = node_->now();
-
-    if (cancel_checker && cancel_checker()) {
-
-        RCLCPP_WARN(node_->get_logger(), "Hybrid A* planning cancelled before search start");
-        logMetrics(false, false, 0.0, global_path);
-        return global_path;
-    }
 
     unsigned int mx_start = 0;
     unsigned int my_start = 0;
@@ -530,16 +522,6 @@ nav_msgs::msg::Path MyHybridAStarPlanner::createPlan(
 
     // 搜索
     while (!open_list.empty()) {
-
-        if (cancel_checker && cancel_checker()) {
-
-            RCLCPP_WARN(node_->get_logger(), "Planning cancelled");
-            const double front_end_search_ms =
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - front_end_start_time).count();
-            logMetrics(false, false, front_end_search_ms, global_path);
-            return nav_msgs::msg::Path{};
-        }
 
         if (expanded_iterations >= max_iterations) {
             RCLCPP_WARN(

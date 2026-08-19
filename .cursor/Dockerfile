@@ -2,16 +2,16 @@
 #
 # The upstream `main` targets Ubuntu 24.04 + ROS 2 Jazzy; this image provides the
 # Ubuntu 22.04 + ROS 2 Humble toolchain that the Humble port (see src/HUMBLE_PORTING.md)
-# builds against. Simulation backends (Gazebo Classic / Ignition Fortress, small_gicp)
-# are intentionally NOT installed yet — they are added when the simulation layer is ported.
+# builds against. Simulation backends for both Humble schemes are installed:
+# Gazebo Classic 11 + gazebo_ros_pkgs (A) and Ignition Fortress + ros_gz (B).
+# small_gicp remains omitted (nav2_visual_processing is COLCON_IGNORE).
 FROM ros:humble
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# --- System toolchain + ROS 2 Humble packages required by the non-simulation workspace ---
-# Covers: Nav2 (incl. MPPI, collision-monitor, AMCL with Omni model, bringup),
-# slam-toolbox, BehaviorTree.CPP v3, g2o, Eigen, PCL, OpenCV/cv_bridge,
-# pointcloud_to_laserscan and osqp-vendor.
+# --- System toolchain + ROS 2 Humble packages ---
+# Covers: Nav2, slam-toolbox, BehaviorTree.CPP v3, g2o, Eigen, PCL, OpenCV,
+# pointcloud_to_laserscan, osqp-vendor, Gazebo Classic, ros_gz, and rviz2.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       cmake \
@@ -34,6 +34,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-humble-xacro \
       ros-humble-pointcloud-to-laserscan \
       ros-humble-osqp-vendor \
+      gazebo \
+      libgazebo-dev \
+      ros-humble-gazebo-ros-pkgs \
+      ros-humble-gazebo-ros \
+      ros-humble-gazebo-plugins \
+      ros-humble-ros-gz \
+      ros-humble-rviz2 \
+      ros-humble-joint-state-publisher \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Sophus (header-only, basic logging, no libfmt) installed to /usr/local ---

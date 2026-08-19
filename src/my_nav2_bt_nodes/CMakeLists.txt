@@ -6,7 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(behaviortree_cpp REQUIRED)
+find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_behavior_tree REQUIRED)
@@ -23,7 +23,7 @@ add_library(my_manage_trajectory_bt_node SHARED
 target_compile_definitions(my_manage_trajectory_bt_node PRIVATE BT_PLUGIN_EXPORT)
 
 ament_target_dependencies(my_manage_trajectory_bt_node
-    behaviortree_cpp
+    behaviortree_cpp_v3
     builtin_interfaces
     geometry_msgs
     nav2_behavior_tree
@@ -45,7 +45,7 @@ install(DIRECTORY include/
 ament_export_include_directories(include)
 ament_export_libraries(my_manage_trajectory_bt_node)
 ament_export_dependencies(
-    behaviortree_cpp
+    behaviortree_cpp_v3
     builtin_interfaces
     geometry_msgs
     nav2_behavior_tree

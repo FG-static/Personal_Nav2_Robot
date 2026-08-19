@@ -1,11 +1,11 @@
 # 基于$\text{Nav2}$的一个机器人仿真项目
 ## 环境要求
-本项目在$\text{Ubuntu 24.04}$下运行，需要提前安装jazzy版本的ROS 2与Nav2，推荐使用rosdep进行安装以快速补全各种依赖。机器人需在Gazebo上进行仿真，在Rviz2中进行小车各种信息的可视化。
+`humble` 分支在 **Ubuntu 22.04 + ROS 2 Humble** 上构建。上游 `main` 仍是 Ubuntu 24.04 + ROS 2 Jazzy。推荐用 rosdep 补依赖。仿真后端（Gazebo Classic 或 Ignition Fortress）见 [`HUMBLE_PORTING.md`](HUMBLE_PORTING.md)；Nav2 / 行为树 / yaml 的共用改动两边都要用。
 
 额外依赖（2D 扫描由 Mid360 点云投影生成，不再使用独立 2D 雷达）：
 
 ```bash
-sudo apt install ros-jazzy-pointcloud-to-laserscan
+sudo apt install ros-humble-pointcloud-to-laserscan
 ```
 
 在工作区根目录也可以用 rosdep 一次补齐：
@@ -24,7 +24,7 @@ rosdep install --from-paths src --ignore-src -r -y
 
 | 项目 | 说明 |
 | --- | --- |
-| 功能包 | [`pointcloud_to_laserscan`](https://index.ros.org/p/pointcloud_to_laserscan/)（ROS 2 Jazzy 发行版包 `ros-jazzy-pointcloud-to-laserscan`） |
+| 功能包 | [`pointcloud_to_laserscan`](https://index.ros.org/p/pointcloud_to_laserscan/)（ROS 2 Humble 发行版包 `ros-humble-pointcloud-to-laserscan`） |
 | 节点 | `pointcloud_to_laserscan_node`，名称 `pointcloud_to_laserscan` |
 | 输入 | `/livox/lidar`（`livox_frame`） |
 | 输出 | `/scan`（`laser_link`，Best Effort，与 AMCL / SLAM Toolbox / costmap 一致） |

@@ -4,11 +4,12 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "angles/angles.h"
 #include "geometry_msgs/msg/point.hpp"
-#include "nav2_core/controller_exceptions.hpp"
+#include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.h"
@@ -88,7 +89,7 @@ void MyTebController::configure(
     node_ = parent;
     auto node = node_.lock();
     if (!node) {
-        throw nav2_core::ControllerException("Failed to lock lifecycle node in MyTebController");
+        throw std::runtime_error("Failed to lock lifecycle node in MyTebController");
     }
 
     tf_ = tf;
@@ -180,7 +181,7 @@ geometry_msgs::msg::TwistStamped MyTebController::computeVelocityCommands(
 
     auto node = node_.lock();
     if (!node) {
-        throw nav2_core::ControllerException("Failed to lock lifecycle node in computeVelocityCommands");
+        throw std::runtime_error("Failed to lock lifecycle node in computeVelocityCommands");
     }
 
     geometry_msgs::msg::TwistStamped cmd_vel;
@@ -307,7 +308,7 @@ void MyTebController::initializeTrajectory(
 bool MyTebController::optimizeTEB(const PoseSE2 &goal_pose) {
 
     if (!graph_optimizer_) {
-        throw nav2_core::ControllerException("TEB graph optimizer is not initialized");
+        throw std::runtime_error("TEB graph optimizer is not initialized");
     }
 
     const bool ok = graph_optimizer_->optimize(

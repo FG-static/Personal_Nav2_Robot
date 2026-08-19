@@ -1,6 +1,6 @@
 #include "my_nav2_planner/astar_planner.hpp"
 #include "my_planning_metrics/path_metrics.hpp"
-#include "nav2_core/planner_exceptions.hpp"
+#include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
@@ -55,8 +55,7 @@ namespace my_nav2_planner {
 
     nav_msgs::msg::Path MyAStarPlanner::createPlan(
         const geometry_msgs::msg::PoseStamped &start,
-        const geometry_msgs::msg::PoseStamped &goal,
-        std::function<bool()> /*cancel_checker*/) {
+        const geometry_msgs::msg::PoseStamped &goal) {
 
         const auto total_start_time = std::chrono::steady_clock::now();
         auto logMetrics =

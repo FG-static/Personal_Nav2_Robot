@@ -4,9 +4,8 @@
 #include <cmath>
 #include <functional>
 
-#include "behaviortree_cpp/bt_factory.h"
-#include "behaviortree_cpp/json_export.h"
-#include "nav2_behavior_tree/json_utils.hpp"
+#include "behaviortree_cpp_v3/bt_factory.h"
+#include "nav2_behavior_tree/bt_conversions.hpp"
 
 namespace my_nav2_bt_nodes
 {
@@ -51,9 +50,6 @@ ManageTrajectoryAction::~ManageTrajectoryAction() {
 }
 
 BT::PortsList ManageTrajectoryAction::providedPorts() {
-
-    BT::RegisterJsonDefinition<geometry_msgs::msg::PoseStamped>();
-    BT::RegisterJsonDefinition<nav_msgs::msg::Path>();
 
     return {
         BT::InputPort<nav_msgs::msg::Path>("input_path", "Candidate path from smoother"),

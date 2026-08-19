@@ -48,17 +48,33 @@ def generate_launch_description():
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
     map_override = LaunchConfiguration('map', default='')
 
-    # AMCL 初始位姿跟随机器人出生点：
+    # AMCL nested initial_pose (Humble) follows spawn:
     #   culvert -> 左侧入口 x=-11.8
     #   map1    -> 地图中心 (0, 0)
-    amcl_initial_pose = PythonExpression([
-        "'[-11.8, 0.0, 0.0]' if '",
-        scene, "' == 'culvert' else '[0.0, 0.0, 0.0]'"
+    amcl_initial_x = PythonExpression([
+        "'-11.8' if '", scene, "' == 'culvert' else '0.0'"
+    ])
+    bt_xml_mecanum = os.path.join(pkg_project_bringup, 'behavior_trees', 'test_nav.xml')
+    bt_xml_diff = os.path.join(pkg_project_bringup, 'behavior_trees', 'test_nav_diff.xml')
+    default_nav_to_pose_bt_xml = PythonExpression([
+        "'", bt_xml_diff, "' if '", chassis,
+        "' == 'diff' else '", bt_xml_mecanum, "'"
     ])
     nav_params_with_pose = RewrittenYaml(
         source_file=nav2_params_nav,
         param_rewrites={
-            'amcl.ros__parameters.initial_pose': amcl_initial_pose,
+            'amcl.ros__parameters.initial_pose.x': amcl_initial_x,
+            'amcl.ros__parameters.initial_pose.y': '0.0',
+            'amcl.ros__parameters.initial_pose.z': '0.0',
+            'amcl.ros__parameters.initial_pose.yaw': '0.0',
+            'default_nav_to_pose_bt_xml': default_nav_to_pose_bt_xml,
+        },
+        convert_types=True,
+    )
+    slam_params_rewritten = RewrittenYaml(
+        source_file=nav2_params_slam,
+        param_rewrites={
+            'default_nav_to_pose_bt_xml': default_nav_to_pose_bt_xml,
         },
         convert_types=True,
     )
@@ -95,7 +111,7 @@ def generate_launch_description():
         ),
         condition=IfCondition(slam_mode),
         launch_arguments={
-            'nav2_params': nav2_params_slam,
+            'nav2_params': slam_params_rewritten,
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
             'use_gazebo_odom_tf': use_gazebo_odom_tf,
@@ -111,7 +127,7 @@ def generate_launch_description():
         ),
         condition=UnlessCondition(slam_mode),
         launch_arguments={
-            'nav2_params': nav2_params_nav,
+            'nav2_params': nav_params_with_pose,
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
             'use_gazebo_odom_tf': use_gazebo_odom_tf,
@@ -143,7 +159,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
             'map': dynamic_map_path,
-            'params_file': nav2_params_slam,
+            'params_file': slam_params_rewritten,
         }.items()
     )
     nav2_bringup_launch_nav = IncludeLaunchDescription(

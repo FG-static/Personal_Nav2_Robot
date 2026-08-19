@@ -2,7 +2,7 @@
 
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "my_planning_metrics/path_metrics.hpp"
-#include "nav2_core/planner_exceptions.hpp"
+#include "nav2_core/exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
 
@@ -119,8 +119,7 @@ namespace my_rrtstar_planner {
 
     nav_msgs::msg::Path MyRRTStarPlanner::createPlan(
         const geometry_msgs::msg::PoseStamped &start,
-        const geometry_msgs::msg::PoseStamped &goal,
-        std::function<bool()> cancel_checker) {
+        const geometry_msgs::msg::PoseStamped &goal) {
 
         const auto total_start_time = std::chrono::steady_clock::now();
         std::size_t goal_samples = 0;
@@ -270,30 +269,6 @@ namespace my_rrtstar_planner {
         std::size_t rewire_count = 0;
         for (int iter = 0; iter < max_iterations_; ++ iter) {
             iterations_executed = iter + 1;
-
-            if (cancel_checker && cancel_checker()) {
-
-                const auto cancel_time = std::chrono::steady_clock::now();
-                const double front_end_ms =
-                    std::chrono::duration<double, std::milli>(
-                        cancel_time - search_start_time).count();
-                RCLCPP_WARN(
-                    node_->get_logger(),
-                    "RRT* planning cancelled after %d iterations and %zu successful extensions",
-                    iterations_executed,
-                    successful_extensions);
-                logMetrics(
-                    false,
-                    iterations_executed,
-                    first_solution_iteration,
-                    tree.size(),
-                    rewire_count,
-                    -1.0,
-                    0.0,
-                    front_end_ms,
-                    global_path);
-                return global_path;
-            }
 
             double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
             int sample_idx; // 采样点在地图中的索引

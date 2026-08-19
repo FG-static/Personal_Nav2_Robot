@@ -7,7 +7,7 @@
 #include <string>
 #include <thread>
 
-#include "behaviortree_cpp/action_node.h"
+#include "behaviortree_cpp_v3/action_node.h"
 #include "builtin_interfaces/msg/time.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
