@@ -21,6 +21,15 @@
 
 namespace my_tunnel_guidance {
 
+namespace {
+
+rclcpp::Clock & mutable_clock(const rclcpp::Node & node) {
+    // Humble Clock::now() is non-const; Node::get_clock() const returns ConstSharedPtr.
+    return *const_cast<rclcpp::Node &>(node).get_clock();
+}
+
+}  // namespace
+
 TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
 : Node("tunnel_guidance", options
 ) {
@@ -162,7 +171,7 @@ bool TunnelGuidanceNode::transformCloudToBase(
             cloud_msg->header.stamp, transform)) {
 
         RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 2000,
+            get_logger(), mutable_clock(*this), 2000,
             "Cannot transform cloud to %s at stamp %.3f",
             estimation_frame_.c_str(),
             rclcpp::Time(cloud_msg->header.stamp).seconds());
@@ -274,7 +283,7 @@ bool TunnelGuidanceNode::getBaseToOutputTransform(
     } catch (const tf2::TransformException & ex) {
 
         RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 2000,
+            get_logger(), mutable_clock(*this), 2000,
             "Cannot transform centerline to %s: %s", output_frame_.c_str(), ex.what());
         return false;
     }
@@ -416,7 +425,7 @@ bool TunnelGuidanceNode::updateWallModel(
         std::abs(right_obs - wall_model_.right_l) > wall_position_jump_limit_) {
 
         RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 2000,
+            get_logger(), mutable_clock(*this), 2000,
             "Wall observation jump too large, keep previous wall model");
         return false;
     }
@@ -584,7 +593,7 @@ void TunnelGuidanceNode::pointCloudCallback(
 
             consecutive_valid_ = 0;
             RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000,
+                get_logger(), mutable_clock(*this), 2000,
                 "Wall observation invalid: left=%zu right=%zu ground=%zu, "
                 "continue using calibrated wall model",
                 left_points.size(), right_points.size(), ground_points.size());
@@ -685,7 +694,7 @@ void TunnelGuidanceNode::publishResults(
             if (waiting_for_auto_goal_result_ && auto_goal_client_) {
 
                 RCLCPP_WARN_THROTTLE(
-                    get_logger(), *get_clock(), 2000,
+                    get_logger(), mutable_clock(*this), 2000,
                     "Tunnel exit detected, canceling active auto goal");
                 auto_goal_client_->async_cancel_all_goals();
                 waiting_for_auto_goal_result_ = false;
@@ -816,7 +825,7 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
     if (!auto_goal_client_->wait_for_action_server(std::chrono::seconds(2))) {
 
         RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 5000,
+            get_logger(), mutable_clock(*this), 5000,
             "NavigateToPose action server is not available");
         return;
     }
@@ -941,7 +950,7 @@ bool TunnelGuidanceNode::transformGoalToMap(
             input.header.stamp, transform)) {
 
         RCLCPP_WARN_THROTTLE(
-            get_logger(), *get_clock(), 5000,
+            get_logger(), mutable_clock(*this), 5000,
             "Cannot transform local goal to %s", auto_goal_frame_id_.c_str());
         return false;
     }
