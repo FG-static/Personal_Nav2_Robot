@@ -543,9 +543,10 @@ void TunnelGuidanceNode::pointCloudCallback(
 
             const bool ground_is_present =
                 ground_points.size() >= static_cast<std::size_t>(exit_min_ground_points_);
+            // 出口要求两侧墙点同时消失；单侧墙点不足更可能是遮挡或绕障，
+            // 不应直接触发出口锁存。
             const bool wall_observation_invalid =
-                !observed_frame.valid ||
-                left_points.size() < static_cast<std::size_t>(exit_max_wall_points_) ||
+                left_points.size() < static_cast<std::size_t>(exit_max_wall_points_) &&
                 right_points.size() < static_cast<std::size_t>(exit_max_wall_points_);
             const bool exit_candidate = ground_is_present && wall_observation_invalid;
 
@@ -615,6 +616,7 @@ void TunnelGuidanceNode::pointCloudCallback(
     has_last_result_ = true;
     consecutive_valid_++;
     const bool publish_valid =
+        !exit_detected_ &&
         wall_model_.initialized && consecutive_valid_ >= valid_frame_count_;
     publishResults(stamp, centerline, publish_valid);
 }
@@ -669,17 +671,34 @@ void TunnelGuidanceNode::publishResults(
 
     if (enable_auto_goal_) {
 
-        latest_auto_goal_ = goal;
-        has_latest_auto_goal_ = true;
-        last_published_valid_ = valid;
-        // 墙体模型已经标定后，单帧观测失败不应打断正在执行的 Nav2 目标；
-        // 当前目标仍由 Nav2 的 costmap/局部规划器负责避障。
-        if (!valid && !wall_model_.initialized &&
-            waiting_for_auto_goal_result_) {
+        if (exit_detected_) {
 
-            auto_goal_client_->async_cancel_all_goals();
-            waiting_for_auto_goal_result_ = false;
-            has_sent_auto_goal_ = false;
+            // 出口已确认：取消正在执行的 goal，并且不再提供新的候选目标，
+            // 避免小车在涵洞外继续沿过期墙体模型前进。
+            if (waiting_for_auto_goal_result_ && auto_goal_client_) {
+
+                RCLCPP_WARN_THROTTLE(
+                    get_logger(), *get_clock(), 2000,
+                    "Tunnel exit detected, canceling active auto goal");
+                auto_goal_client_->async_cancel_all_goals();
+                waiting_for_auto_goal_result_ = false;
+                has_sent_auto_goal_ = false;
+            }
+            has_latest_auto_goal_ = false;
+        } else {
+
+            latest_auto_goal_ = goal;
+            has_latest_auto_goal_ = true;
+            last_published_valid_ = valid;
+            // 墙体模型已经标定后，单帧观测失败不应打断正在执行的 Nav2 目标；
+            // 当前目标仍由 Nav2 的 costmap/局部规划器负责避障。
+            if (!valid && !wall_model_.initialized &&
+                waiting_for_auto_goal_result_) {
+
+                auto_goal_client_->async_cancel_all_goals();
+                waiting_for_auto_goal_result_ = false;
+                has_sent_auto_goal_ = false;
+            }
         }
     }
 
@@ -741,7 +760,8 @@ void TunnelGuidanceNode::publishResults(
 void TunnelGuidanceNode::maybeSendAutoGoal() {
 
     if (!enable_auto_goal_ || !auto_goal_client_ ||
-        !wall_model_.initialized || !has_latest_auto_goal_
+        !wall_model_.initialized || !has_latest_auto_goal_ ||
+        exit_detected_
     ) {
 
         return;
