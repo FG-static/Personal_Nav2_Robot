@@ -85,6 +85,7 @@ private:
     bool transformGoalToMap(
         const geometry_msgs::msg::PoseStamped & input,
         geometry_msgs::msg::PoseStamped & output) const;
+    void advanceAutoGoalCandidate();
 
     void publishResults(
         const rclcpp::Time & stamp,
@@ -139,7 +140,7 @@ private:
     bool enable_auto_goal_ = false;
     std::string auto_goal_frame_id_ = "map";
     double min_goal_send_interval_ = 1.0;
-    double goal_moved_resend_distance_ = 0.5;
+    double auto_goal_dwell_time_ = 8.0;
 
     TunnelWallModel wall_model_;
     int calibration_valid_frames_ = 0;
@@ -158,9 +159,11 @@ private:
     bool has_latest_auto_goal_ = false;
     bool has_sent_auto_goal_ = false;
     bool waiting_for_auto_goal_result_ = false;
+    bool auto_goal_dwelling_ = false;
     geometry_msgs::msg::PoseStamped latest_auto_goal_;
     geometry_msgs::msg::PoseStamped last_sent_auto_goal_;
     rclcpp::Time last_auto_goal_send_time_{0, 0, RCL_ROS_TIME};
+    rclcpp::Time dwell_start_time_{0, 0, RCL_ROS_TIME};
     uint8_t auto_goal_seq_ = 0;
     uint8_t active_auto_goal_seq_ = 0;
     int auto_goal_candidate_count_ = 4;

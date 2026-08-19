@@ -66,7 +66,7 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     enable_auto_goal_ = declare_parameter("enable_auto_goal", false);
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
-    goal_moved_resend_distance_ = declare_parameter("goal_moved_resend_distance", 0.5);
+    auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 8.0);
     auto_goal_candidate_count_ =
         declare_parameter(
             "auto_goal_candidate_count",
@@ -75,6 +75,14 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
         declare_parameter(
             "auto_goal_candidate_spacing",
             1.0);
+    if (auto_goal_candidate_count_ < 1) {
+
+        auto_goal_candidate_count_ = 1;
+    }
+    if (auto_goal_dwell_time_ < 0.0) {
+
+        auto_goal_dwell_time_ = 0.0;
+    }
 
     geometry_params_.min_ground_points =
         declare_parameter("min_ground_points", 100);
@@ -659,7 +667,6 @@ void TunnelGuidanceNode::publishResults(
         lookahead_distance_ +
         static_cast<double>(auto_goal_candidate_index_) *
         auto_goal_candidate_spacing_;
-
     const std::size_t goal_index = std::min(
         centerline.points.size() - 1,
         static_cast<std::size_t>(
@@ -684,6 +691,7 @@ void TunnelGuidanceNode::publishResults(
                 waiting_for_auto_goal_result_ = false;
                 has_sent_auto_goal_ = false;
             }
+            auto_goal_dwelling_ = false;
             has_latest_auto_goal_ = false;
         } else {
 
@@ -698,6 +706,7 @@ void TunnelGuidanceNode::publishResults(
                 auto_goal_client_->async_cancel_all_goals();
                 waiting_for_auto_goal_result_ = false;
                 has_sent_auto_goal_ = false;
+                auto_goal_dwelling_ = false;
             }
         }
     }
@@ -761,29 +770,41 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
     if (!enable_auto_goal_ || !auto_goal_client_ ||
         !wall_model_.initialized || !has_latest_auto_goal_ ||
-        exit_detected_
-    ) {
+        exit_detected_)
+    {
+
+        return;
+    }
+
+    // 执行中不改发新目标，避免滑动前瞻把巡检点不断往前推。
+    if (waiting_for_auto_goal_result_) {
 
         return;
     }
 
     const rclcpp::Time now = get_clock()->now();
-    if (has_sent_auto_goal_ &&
-        (now - last_auto_goal_send_time_).seconds() < min_goal_send_interval_) {
+    if (auto_goal_dwelling_) {
 
-        return;
+        if ((now - dwell_start_time_).seconds() < auto_goal_dwell_time_) {
+
+            return;
+        }
+        RCLCPP_INFO(get_logger(), "Auto goal dwell finished, sending next lookahead");
+        auto_goal_dwelling_ = false;
+        has_sent_auto_goal_ = false;
+        auto_goal_candidate_index_ = 0;
     }
 
     if (has_sent_auto_goal_) {
 
-        const double dx =
-            latest_auto_goal_.pose.position.x - last_sent_auto_goal_.pose.position.x;
-        const double dy =
-            latest_auto_goal_.pose.position.y - last_sent_auto_goal_.pose.position.y;
-        if (std::hypot(dx, dy) < goal_moved_resend_distance_) {
+        return;
+    }
 
-            return;
-        }
+    if ((now - last_auto_goal_send_time_).seconds() < min_goal_send_interval_ &&
+        last_auto_goal_send_time_.nanoseconds() > 0)
+    {
+
+        return;
     }
 
     geometry_msgs::msg::PoseStamped goal_in_map;
@@ -830,7 +851,8 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
     RCLCPP_INFO(
         get_logger(),
-        "Sending auto goal: x=%.2f y=%.2f yaw=%.2f",
+        "Sending auto goal k=%d: x=%.2f y=%.2f yaw=%.2f",
+        auto_goal_candidate_index_,
         action_goal.pose.pose.position.x,
         action_goal.pose.pose.position.y,
         std::atan2(
@@ -853,6 +875,7 @@ void TunnelGuidanceNode::autoGoalResponseCallback(
         RCLCPP_WARN(get_logger(), "Auto goal was rejected by NavigateToPose");
         waiting_for_auto_goal_result_ = false;
         has_sent_auto_goal_ = false;
+        advanceAutoGoalCandidate();
     }
 }
 
@@ -873,19 +896,37 @@ void TunnelGuidanceNode::autoGoalResultCallback(
     switch (result.code) {
 
         case rclcpp_action::ResultCode::SUCCEEDED:
-            RCLCPP_INFO(get_logger(), "Auto goal succeeded");
+            auto_goal_dwelling_ = true;
+            dwell_start_time_ = get_clock()->now();
+            auto_goal_candidate_index_ = 0;
+            RCLCPP_INFO(
+                get_logger(),
+                "Auto goal succeeded, dwelling for %.1f s",
+                auto_goal_dwell_time_);
             break;
         case rclcpp_action::ResultCode::ABORTED:
-            RCLCPP_WARN(get_logger(), "Auto goal aborted, will retry with latest goal");
+            RCLCPP_WARN(get_logger(), "Auto goal aborted, trying next candidate");
             has_sent_auto_goal_ = false;
+            advanceAutoGoalCandidate();
             break;
         case rclcpp_action::ResultCode::CANCELED:
             RCLCPP_INFO(get_logger(), "Auto goal canceled");
             has_sent_auto_goal_ = false;
+            auto_goal_dwelling_ = false;
             break;
         default:
             has_sent_auto_goal_ = false;
+            auto_goal_dwelling_ = false;
             break;
+    }
+}
+
+void TunnelGuidanceNode::advanceAutoGoalCandidate() {
+
+    ++auto_goal_candidate_index_;
+    if (auto_goal_candidate_index_ >= auto_goal_candidate_count_) {
+
+        auto_goal_candidate_index_ = 0;
     }
 }
 
