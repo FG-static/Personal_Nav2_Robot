@@ -21,6 +21,9 @@ def generate_launch_description():
     # 使用 BIEVR-LIO 等外部里程计时必须关闭 Gazebo 的动态 odom TF，
     # 避免两个节点同时发布 odom -> base_footprint。
     use_gazebo_odom_tf = LaunchConfiguration('use_gazebo_odom_tf', default='false')
+    # p3d /ground_truth remapped to /odom + odom->base_footprint TF.
+    # Forces wheel-odom TF off so the two sources cannot fight.
+    use_ground_truth_odom = LaunchConfiguration('use_ground_truth_odom', default='false')
     # nav2_bringup 内部用 PythonExpression 直接拼接 slam 字符串，
     # 所以这里统一转成 Python 布尔字面量，兼容 slam:=true 和 slam:=True。
     slam_for_bringup = PythonExpression([
@@ -62,10 +65,19 @@ def generate_launch_description():
         "'", bt_xml_diff, "' if '", chassis,
         "' == 'diff' else '", bt_xml_mecanum, "'"
     ])
-    # Without BIEVR-LIO, Nav2 must read Gazebo wheel odometry.
+    # Odom source: ground-truth relay, Gazebo wheel odom, or BIEVR-LIO.
     odom_topic = PythonExpression([
-        "'/wheel_odom' if '", use_gazebo_odom_tf,
-        "' in ('true', 'True') else '/bievr_lio/odom'"
+        "'/odom' if '", use_ground_truth_odom, "' in ('true', 'True') else "
+        "('/wheel_odom' if '", use_gazebo_odom_tf,
+        "' in ('true', 'True') else '/bievr_lio/odom')"
+    ])
+    gazebo_odom_tf = PythonExpression([
+        "'false' if '", use_ground_truth_odom, "' in ('true', 'True') else "
+        "('true' if '", use_gazebo_odom_tf, "' in ('true', 'True') else 'false')"
+    ])
+    amcl_tf_broadcast = PythonExpression([
+        "'False' if '", use_ground_truth_odom,
+        "' in ('true', 'True') else 'True'"
     ])
     nav_params_with_pose = RewrittenYaml(
         source_file=nav2_params_nav,
@@ -74,6 +86,7 @@ def generate_launch_description():
             'amcl.ros__parameters.initial_pose.y': '0.0',
             'amcl.ros__parameters.initial_pose.z': '0.0',
             'amcl.ros__parameters.initial_pose.yaw': '0.0',
+            'tf_broadcast': amcl_tf_broadcast,
             'default_nav_to_pose_bt_xml': default_nav_to_pose_bt_xml,
             'odom_topic': odom_topic,
         },
@@ -123,7 +136,7 @@ def generate_launch_description():
             'nav2_params': slam_params_rewritten,
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
-            'use_gazebo_odom_tf': use_gazebo_odom_tf,
+            'use_gazebo_odom_tf': gazebo_odom_tf,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles,
@@ -140,7 +153,7 @@ def generate_launch_description():
             'nav2_params': nav_params_with_pose,
             'use_sim_time': use_sim_time,
             'slam': slam_for_bringup,
-            'use_gazebo_odom_tf': use_gazebo_odom_tf,
+            'use_gazebo_odom_tf': gazebo_odom_tf,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
             'spawn_map1_obstacles': spawn_map1_obstacles,
@@ -197,14 +210,38 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    ground_truth_odom_relay = Node(
+        package='my_nav2_robot',
+        executable='ground_truth_odom_relay.py',
+        name='ground_truth_odom_relay',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'input_topic': '/ground_truth',
+            'output_topic': '/odom',
+            'odom_frame': 'odom',
+            'base_frame': 'base_footprint',
+            'publish_tf': True,
+        }],
+        output='screen',
+        condition=IfCondition(use_ground_truth_odom),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('slam', default_value='False', description='Whether to run SLAM'),
         DeclareLaunchArgument(
             'use_gazebo_odom_tf',
             default_value='false',
             description=(
-                'Use Gazebo ground-truth odom TF instead of an external odometry '
-                'source such as BIEVR-LIO.'
+                'Publish odom TF from planar_move / diff_drive wheel odometry. '
+                'Keep false when BIEVR-LIO or use_ground_truth_odom is used.'
+            )
+        ),
+        DeclareLaunchArgument(
+            'use_ground_truth_odom',
+            default_value='false',
+            description=(
+                'Remap p3d /ground_truth to /odom and broadcast '
+                'odom -> base_footprint. Disables wheel-odom TF and AMCL tf_broadcast.'
             )
         ),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
@@ -244,6 +281,7 @@ def generate_launch_description():
         gazebo_sim_slam,
         gazebo_sim_nav,
         static_tf_node,
+        ground_truth_odom_relay,
         nav2_bringup_launch_slam,
         nav2_bringup_launch_nav,
         rviz_node
