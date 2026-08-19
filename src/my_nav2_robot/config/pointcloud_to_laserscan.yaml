@@ -1,4 +1,5 @@
 # Project Mid360 PointCloud2 onto a 2D LaserScan for AMCL / SLAM Toolbox / costmaps.
+# Implemented in-tree by my_nav2_robot/pointcloud_to_laserscan_node (no apt package).
 # Heights are in target_frame (laser_link). Ground is about -0.19 m in that frame.
 # Retune min_height / max_height / range_* on the real robot after mounting Mid360.
 pointcloud_to_laserscan:

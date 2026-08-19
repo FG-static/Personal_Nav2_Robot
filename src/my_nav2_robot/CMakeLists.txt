@@ -44,6 +44,7 @@ link_directories(${GAZEBO_LIBRARY_DIRS})
 add_executable(robot_driver src/robot_driver.cpp)
 add_executable(odom_evaluator src/odom_evaluator.cpp)
 add_executable(simulated_imu_publisher src/simulated_imu_publisher.cpp)
+add_executable(pointcloud_to_laserscan_node src/pointcloud_to_laserscan_node.cpp)
 add_library(my_nav2_robot_mid360_gz_plugin SHARED src/mid360_gz_plugin.cpp)
 
 ament_target_dependencies(robot_driver
@@ -76,6 +77,20 @@ ament_target_dependencies(simulated_imu_publisher
     nav_msgs
 )
 
+target_include_directories(pointcloud_to_laserscan_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIRS}
+)
+
+ament_target_dependencies(pointcloud_to_laserscan_node
+    rclcpp
+    sensor_msgs
+    tf2
+    tf2_ros
+    tf2_eigen
+)
+
 target_include_directories(my_nav2_robot_mid360_gz_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
@@ -99,6 +114,7 @@ install(TARGETS
   robot_driver
   odom_evaluator
   simulated_imu_publisher
+  pointcloud_to_laserscan_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

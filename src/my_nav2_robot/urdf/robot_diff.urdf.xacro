@@ -143,7 +143,7 @@
     <xacro:wheel prefix="rear_right" reflect_x="-1" reflect_y="-1"/>
 
     <!-- 虚拟 2D 扫描坐标系：实车没有独立 2D 雷达。
-         /scan 由 pointcloud_to_laserscan 从 Mid360 点云水平切片生成，
+         /scan 由 my_nav2_robot 的 pointcloud_to_laserscan_node 从 Mid360 点云水平切片生成，
          frame_id 固定为 laser_link，避免改 AMCL / SLAM Toolbox / costmap。 -->
     <link name="laser_link">
         <visual>

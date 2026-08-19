@@ -45,7 +45,7 @@
 未装、两套方案都要用 apt 补的：
 
 ```bash
-sudo apt install ros-humble-pointcloud-to-laserscan ros-humble-osqp-vendor
+sudo apt install ros-humble-osqp-vendor
 ```
 
 仅方案 B 额外需要：
@@ -281,7 +281,7 @@ source install/setup.bash
 
 **优点**
 
-- 零额外仿真发行版，sudo 只装 `pointcloud-to-laserscan` 和 `osqp-vendor`。
+- 零额外仿真发行版，sudo 只装 `osqp-vendor`（`/scan` 由本仓库点云切片节点生成）。
 - 本机已经有全套 `libgazebo_ros_*.so`。
 - 不依赖 `parameter_bridge` 的 `gz.msgs` / `ignition.msgs` 类型字符串。
 
@@ -309,7 +309,7 @@ source install/setup.bash
 <depend>gazebo_dev</depend>
 <depend>gazebo_ros</depend>
 <exec_depend>gazebo_ros_pkgs</exec_depend>
-<exec_depend>pointcloud_to_laserscan</exec_depend>
+<exec_depend>xacro</exec_depend>
 ```
 
 `CMakeLists.txt` 删除：
@@ -570,7 +570,7 @@ CSV 解析、噪声、拼 PointCloud2 的代码尽量原样搬，避免 LIO 时�
 | `/ground_truth` | `gazebo_ros_p3d` |
 | `/livox/lidar` | 自定义 Mid360 Classic 插件 |
 | `/livox/imu` | `simulated_imu_publisher` |
-| `/scan` | `pointcloud_to_laserscan` |
+| `/scan` | `my_nav2_robot/pointcloud_to_laserscan_node`（Mid360 点云水平切片） |
 | `odom → base_footprint` | 仅当 `use_gazebo_odom_tf:=true` 时由驱动/p3d 发布 |
 
 不再出现 `/camera/*`、`/depth_camera/*` 桥（那些传感器在 xacro 里已注释）。
@@ -582,7 +582,7 @@ CSV 解析、噪声、拼 PointCloud2 的代码尽量原样搬，避免 LIO 时�
 3. 用 `planar_move` + `p3d` + 空世界先把车刷进 Gazebo，`ros2 topic echo /cmd_vel` 能平移。
 4. spawn 涵洞 SDF，确认碰撞。
 5. 移植 Mid360 插件，确认 `/livox/lidar` 有点、涵洞墙壁上有回波。
-6. 接上 `pointcloud_to_laserscan`，RViz 看 `/scan`。
+6. 接上本仓库 `pointcloud_to_laserscan_node`，RViz 看 `/scan`。
 7. 再开 `full_navigation.launch.py`。
 
 ### 3.9 方案 A 风险与折中
@@ -708,7 +708,7 @@ Fortress 上先跑官方 demo（`ros_gz_sim_demos`），把能通的 `@` / `[` /
 - `[` Gazebo → ROS（如 `/clock`、`/ground_truth`）
 - `@` 双向
 
-4. `/scan` 仍然 **不要** 从 Gazebo 2D 雷达桥，继续用 Mid360 点云 + `pointcloud_to_laserscan`。
+4. `/scan` 仍然 **不要** 从 Gazebo 2D 雷达桥，继续用 Mid360 点云 + 本仓库 `pointcloud_to_laserscan_node`。
 
 5. 已注释的相机 / depth 桥可以继续注释。
 
@@ -815,7 +815,7 @@ ROS 发布部分（rclcpp、`PointCloud2`、CSV）与方案 A 一样可以原样
 
 ```text
 第 0 步  conda deactivate；确认 python3 为 3.10
-         sudo apt install ros-humble-pointcloud-to-laserscan ros-humble-osqp-vendor
+         sudo apt install ros-humble-osqp-vendor
          （仅 B）sudo apt install ros-humble-ros-gz
 
 第 1 步  第 2 节：规划器签名、异常头、BT v3、yaml、README
