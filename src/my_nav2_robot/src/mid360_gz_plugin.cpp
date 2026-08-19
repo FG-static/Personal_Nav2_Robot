@@ -97,10 +97,15 @@ void Mid360GzPlugin::Load(gazebo::physics::ModelPtr model, sdf::ElementPtr sdf)
 
     const std::string resolved_csv = resolveCsvPath(csv_file_name_);
     if (!loadScanPattern(resolved_csv)) {
-        gzerr << "[Mid360GzPlugin] Cannot load scan pattern '"
-              << csv_file_name_ << "' (resolved '" << resolved_csv << "')"
-              << std::endl;
-        return;
+        gzwarn << "[Mid360GzPlugin] Scan CSV '" << csv_file_name_
+               << "' (resolved '" << resolved_csv
+               << "') is missing; using a built-in Mid360 FOV fallback"
+               << std::endl;
+        if (!loadFallbackScanPattern()) {
+            gzerr << "[Mid360GzPlugin] Cannot build a fallback scan pattern"
+                  << std::endl;
+            return;
+        }
     }
 
     node_ = gazebo_ros::Node::Get(sdf);
@@ -201,6 +206,36 @@ bool Mid360GzPlugin::loadScanPattern(const std::string &file_name)
         }
     }
 
+    return !scan_pattern_.empty();
+}
+
+bool Mid360GzPlugin::loadFallbackScanPattern()
+{
+    constexpr int kAzimuthBins = 400;
+    constexpr int kElevationBins = 50;
+    constexpr double kMinElevationDeg = -7.0;
+    constexpr double kMaxElevationDeg = 52.0;
+    scan_pattern_.clear();
+    scan_pattern_.reserve(static_cast<std::size_t>(kAzimuthBins * kElevationBins));
+    for (int elevation_index = 0; elevation_index < kElevationBins; ++elevation_index) {
+        const double elevation = (kMinElevationDeg +
+            (kMaxElevationDeg - kMinElevationDeg) *
+            static_cast<double>(elevation_index) /
+            static_cast<double>(kElevationBins - 1)) * kDegreesToRadians;
+        const double horizontal_scale = std::cos(elevation);
+        for (int azimuth_index = 0; azimuth_index < kAzimuthBins; ++azimuth_index) {
+            const double azimuth = 2.0 * M_PI *
+                static_cast<double>(azimuth_index) /
+                static_cast<double>(kAzimuthBins);
+            ScanRay ray;
+            ray.direction.Set(
+                horizontal_scale * std::cos(azimuth),
+                horizontal_scale * std::sin(azimuth),
+                std::sin(elevation));
+            ray.direction.Normalize();
+            scan_pattern_.push_back(ray);
+        }
+    }
     return !scan_pattern_.empty();
 }
 

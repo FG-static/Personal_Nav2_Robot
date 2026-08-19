@@ -296,7 +296,7 @@
             <ros>
                 <remapping>odom:=ground_truth</remapping>
             </ros>
-            <body_name>base_link</body_name>
+            <body_name>base_footprint</body_name>
             <frame_name>world</frame_name>
             <update_rate>200.0</update_rate>
             <xyz_offset>0 0 0</xyz_offset>

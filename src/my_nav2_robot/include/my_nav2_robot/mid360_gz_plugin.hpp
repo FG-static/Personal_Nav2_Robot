@@ -59,6 +59,7 @@ private:
     void OnUpdate(const gazebo::common::UpdateInfo &info);
     std::string resolveCsvPath(const std::string &file_name) const;
     bool loadScanPattern(const std::string &file_name);
+    bool loadFallbackScanPattern();
     std::vector<CollisionPrimitive> collectCollisionPrimitives();
     bool raycast(
         const ignition::math::Vector3d &origin,

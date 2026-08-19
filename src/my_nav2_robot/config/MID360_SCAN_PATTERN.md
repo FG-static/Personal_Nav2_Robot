@@ -1,7 +1,12 @@
 # Mid360 扫描模式来源
 
-`mid360.csv` 来自 `Keith-iise/ros2_humble_mid360_simulation` 中的
-`ros2_livox_simulation/scan_mode/mid360.csv`，原项目以 MIT License 发布。
+`mid360.csv` 来自 Livox 扫描模式表（本仓库 `.gitignore` 该文件，约 17MB）。`colcon build` 时若本地没有该文件会自动下载：
+
+```
+https://raw.githubusercontent.com/Livox-SDK/livox_laser_simulation/master/scan_mode/mid360.csv
+```
+
+也可手动放到 `src/my_nav2_robot/config/mid360.csv`。原始记录见 `Keith-iise/ros2_humble_mid360_simulation`（MIT）：
 
 - 上游仓库：https://github.com/Keith-iise/ros2_humble_mid360_simulation
 - 获取日期：2026-08-14

@@ -23,6 +23,22 @@ find_package(gazebo_dev REQUIRED)
 find_package(gazebo_ros REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
+set(_mid360_csv "${CMAKE_CURRENT_SOURCE_DIR}/config/mid360.csv")
+if(NOT EXISTS "${_mid360_csv}")
+  message(STATUS "Downloading Mid360 scan pattern to ${_mid360_csv}")
+  file(DOWNLOAD
+    "https://raw.githubusercontent.com/Livox-SDK/livox_laser_simulation/master/scan_mode/mid360.csv"
+    "${_mid360_csv}"
+    SHOW_PROGRESS
+    STATUS _mid360_csv_status)
+  list(GET _mid360_csv_status 0 _mid360_csv_error)
+  if(NOT _mid360_csv_error EQUAL 0)
+    list(GET _mid360_csv_status 1 _mid360_csv_message)
+    message(WARNING "Could not download mid360.csv: ${_mid360_csv_message}. "
+      "The Mid360 plugin will use a built-in FOV fallback until the file is present.")
+  endif()
+endif()
+
 link_directories(${GAZEBO_LIBRARY_DIRS})
 
 add_executable(robot_driver src/robot_driver.cpp)

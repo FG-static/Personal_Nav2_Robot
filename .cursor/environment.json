@@ -4,5 +4,5 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
-  "install": "sudo apt-get update -qq || true\nsudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold gazebo libgazebo-dev ros-humble-gazebo-ros-pkgs ros-humble-ros-gz ros-humble-rviz2 ros-humble-joint-state-publisher || true\nrosdep install --from-paths src --ignore-src -r -y --rosdistro humble --skip-keys \"small_gicp sophus opencv2 osqp behaviortree_cpp libg2o-dev\" || true"
+  "install": "sudo apt-get update -qq || true\nsudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold gazebo libgazebo-dev ros-humble-gazebo-ros-pkgs ros-humble-ros-gz ros-humble-rviz2 ros-humble-joint-state-publisher || true\ntest -f src/my_nav2_robot/config/mid360.csv || curl -fsSL -o src/my_nav2_robot/config/mid360.csv https://raw.githubusercontent.com/Livox-SDK/livox_laser_simulation/master/scan_mode/mid360.csv || true\nrosdep install --from-paths src --ignore-src -r -y --rosdistro humble --skip-keys \"small_gicp sophus opencv2 osqp behaviortree_cpp libg2o-dev\" || true"
 }
