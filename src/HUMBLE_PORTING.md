@@ -289,7 +289,7 @@ source install/setup.bash
 
 - Mid360 插件要从 Harmonic ECM 重写到 Classic 物理引擎，是本方案最大工作量。
 - `planar_move` 是平面运动学，和 Harmonic `VelocityControl` 手感会差一点，控制器参数可能要微调。
-- Classic `diff_drive` 通常左右各一个关节；现在 URDF 是同侧前后轮并联，可能只能驱动前轮或改成 skid-steer 折中。
+- Classic `diff_drive` 默认左右各一个关节。本仓库差速 URDF 是四轮并联，用 `num_wheel_pairs=2` 做成 skid-steer，前后轮一起驱动。
 - SDF 1.10 的涵洞 / map1 模型要降到 1.6/1.7。
 
 ### 3.2 依赖改动（`my_nav2_robot`）
@@ -435,10 +435,14 @@ Node(
       <remapping>cmd_vel:=cmd_vel</remapping>
       <remapping>odom:=wheel_odom</remapping>
     </ros>
-    <num_wheel_pairs>1</num_wheel_pairs>
+    <num_wheel_pairs>2</num_wheel_pairs>
     <left_joint>front_left_wheel_joint</left_joint>
     <right_joint>front_right_wheel_joint</right_joint>
+    <left_joint>rear_left_wheel_joint</left_joint>
+    <right_joint>rear_right_wheel_joint</right_joint>
     <wheel_separation>${wheel_separation}</wheel_separation>
+    <wheel_separation>${wheel_separation}</wheel_separation>
+    <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
     <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
     <max_wheel_torque>50</max_wheel_torque>
     <max_wheel_acceleration>3.0</max_wheel_acceleration>
@@ -451,7 +455,7 @@ Node(
 </gazebo>
 ```
 
-后轮若无驱动会拖着转。若仿真打滑明显，再评估是否加第二对轮或改成 skid-steer。
+同侧前后轮转速相同，转弯靠侧向滑移（`mu2` 低于 `mu1`）。若打滑或原地转不动，再调轮地摩擦。
 
 **关节状态**
 
