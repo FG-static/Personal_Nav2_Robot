@@ -268,7 +268,8 @@
         </sensor>
     </gazebo> -->
 
-    <!-- 四轮差速：同侧前后轮并联。第一轮只驱动前轮；后轮随动。
+    <!-- 四轮差速（skid-steer）：gazebo_ros_diff_drive 用 num_wheel_pairs=2
+         同时驱动前后两对轮，同侧前后轮转速相同。
          轮式里程计发到 /wheel_odom。publish_odom_tf 由 use_gazebo_odom_tf 控制。 -->
     <gazebo>
         <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
@@ -276,9 +277,14 @@
                 <remapping>cmd_vel:=cmd_vel</remapping>
                 <remapping>odom:=wheel_odom</remapping>
             </ros>
+            <num_wheel_pairs>2</num_wheel_pairs>
             <left_joint>front_left_wheel_joint</left_joint>
             <right_joint>front_right_wheel_joint</right_joint>
+            <left_joint>rear_left_wheel_joint</left_joint>
+            <right_joint>rear_right_wheel_joint</right_joint>
             <wheel_separation>${wheel_separation}</wheel_separation>
+            <wheel_separation>${wheel_separation}</wheel_separation>
+            <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
             <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
             <max_wheel_torque>50</max_wheel_torque>
             <max_wheel_acceleration>3.0</max_wheel_acceleration>
