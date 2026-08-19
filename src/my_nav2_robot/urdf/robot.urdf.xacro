@@ -142,7 +142,9 @@
     <xacro:wheel prefix="rear_left" reflect_x="-1" reflect_y="1"/>
     <xacro:wheel prefix="rear_right" reflect_x="-1" reflect_y="-1"/>
 
-    <!--雷达-->
+    <!-- 虚拟 2D 扫描坐标系：实车没有独立 2D 雷达。
+         /scan 由 pointcloud_to_laserscan 从 Mid360 点云水平切片生成，
+         frame_id 固定为 laser_link，避免改 AMCL / SLAM Toolbox / costmap。 -->
     <link name="laser_link">
         <visual>
             <geometry>
@@ -224,32 +226,6 @@
         <origin xyz="0 0 0" rpy="0 0 0"/>
     </joint>
 
-    <!--雷达插件-->
-    <gazebo reference="laser_link">
-        <sensor name="gpu_lidar" type="gpu_lidar">
-            <topic>scan</topic>
-            <pose>0 0 0 0 0 0</pose>
-            <frame_id>laser_link</frame_id>
-            <gz_frame_id>laser_link</gz_frame_id>
-            <visualize>true</visualize> <update_rate>50</update_rate>
-            <lidar>
-                <scan>
-                    <horizontal>
-                        <samples>360</samples>
-                        <resolution>1</resolution>
-                        <min_angle>-3.14159</min_angle>
-                        <max_angle>3.14159</max_angle>
-                    </horizontal>
-                </scan>
-                <range>
-                    <min>0.12</min>
-                    <max>12.0</max>
-                    <resolution>0.01</resolution>
-                </range>
-            </lidar>
-        </sensor>
-    </gazebo>
-
     <!-- Mid360 CSV scan pattern with per-point timestamps for the LIO frontend. -->
     <gazebo>
         <plugin
@@ -292,13 +268,6 @@
             </camera>
         </sensor>
     </gazebo> -->
-
-    <!-- Rendering sensor system required by the 2D GPU lidar. -->
-    <gazebo>
-        <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
-            <render_engine>ogre2</render_engine>
-        </plugin>
-    </gazebo>
 
     <!-- 差速驱动插件 -->
     <!-- <gazebo>

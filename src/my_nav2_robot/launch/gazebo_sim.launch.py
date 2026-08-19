@@ -120,14 +120,13 @@ def generate_launch_description():
         executable='parameter_bridge',
         arguments=['/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',  # 最好是这样
                    # /odom@nav_msgs/msg/Odometry[gz.msgs.Odometry，轮式里程计
-                   '/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
+                   # /scan 不再从 Gazebo 2D 雷达桥接，改由 Mid360 点云投影生成。
                    '/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image',
                    '/camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo',
                    '/depth_camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked',
                    '/depth_camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
                    '/depth_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
                    '/joint_states@sensor_msgs/msg/JointState@gz.msgs.Model',
-                   '/scan/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked',
                    '/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry',  # 绝对真实里程计
                    '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],  # 这个确实要单向
         parameters=[{'use_sim_time': True}],
@@ -148,6 +147,14 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}],
         output='screen',
         condition=IfCondition(gazebo_odom_tf_condition)
+    )
+
+    # Mid360 点云 -> /scan，供 AMCL / SLAM Toolbox / costmap 继续用 LaserScan。
+    pointcloud_to_scan = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_share, 'launch', 'pointcloud_to_laserscan.launch.py')
+        ),
+        launch_arguments={'use_sim_time': 'true'}.items(),
     )
 
     simulated_imu = Node(
@@ -177,6 +184,7 @@ def generate_launch_description():
         spawn_map1_obstacles,
         bridge,
         tf_bridge,
+        pointcloud_to_scan,
         simulated_imu,
         node_robot_state_publisher,
     ])

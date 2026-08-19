@@ -70,8 +70,8 @@ slam_toolbox:
 
     debug_logging: false
     throttle_scans: 1
-    # /scan is 50 Hz, while BIEVR-LIO publishes delayed lidar-time odom TF.
-    # Keep enough scans pending until the corresponding TF enters the buffer.
+    # /scan is projected from Mid360 (~10 Hz). BIEVR-LIO odom TF is delayed
+    # to lidar time, so keep enough scans pending until that TF is available.
     scan_queue_size: 20
     # 不为 0 时才会发布 map -> odom
     transform_publish_period: 0.02
@@ -79,7 +79,7 @@ slam_toolbox:
     resolution: 0.05
     restamp_tf: false
     min_laser_range: 0.0
-    # 与 robot.urdf.xacro 中 gpu_lidar 的 12m 量程保持一致
+    # 与 Mid360 / pointcloud_to_laserscan 的 12m 量程保持一致
     max_laser_range: 12.0
     minimum_time_interval: 0.5
     transform_timeout: 0.2
@@ -414,7 +414,7 @@ global_costmap:
       robot_radius: 0.28
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -431,10 +431,10 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
+          raytrace_max_range: 12.0
           obstacle_min_range: 0.0
+          obstacle_max_range: 11.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
