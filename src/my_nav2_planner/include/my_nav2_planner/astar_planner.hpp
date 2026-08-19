@@ -45,10 +45,11 @@ namespace my_nav2_planner {
         nav2_costmap_2d::Costmap2D *costmap_;
         std::string global_frame_, name_;
         double unknown_cost_, interpolation_resolution_;
+        double obstacle_cost_weight_ = 6.0;
         bool treat_unknown_as_free_ = false;
         rclcpp::Publisher<rm_interfaces::msg::ReplanEvent>::SharedPtr replan_event_pub_;
         std::uint64_t replan_event_id_ = 0;
-        int cost_threshold_ = 250; // 0 < x <= 253
+        int cost_threshold_ = 253; // 0 < x <= 253
     };
 } // namespace my_nav2_planner
 

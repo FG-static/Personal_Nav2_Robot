@@ -380,7 +380,8 @@ planner_server:
       unknown_cost: 5.0
       treat_unknown_as_free: true
       interpolation_resolution: 0.1
-      cost_threshold: 160 # 0 ~ 253
+      cost_threshold: 253 # 硬障碍：inscribed/lethal；膨胀区靠 obstacle_cost_weight
+      obstacle_cost_weight: 6.0
     RRTStar:
       plugin: "my_rrtstar_planner/MyRRTStarPlanner"
       step_size: 0.25

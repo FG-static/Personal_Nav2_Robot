@@ -1,0 +1,316 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="my_nav2_bot">
+
+    <!-- 差速底盘变体：Gazebo 用 DiffDrive 吃 /cmd_vel 的 vx + wz。
+         odom -> base_footprint 仍由 BIEVR-LIO 发布，本文件不发布导航用轮式 TF。 -->
+
+    <!--机器人身体-->
+    <xacro:property name="chassis_length" value="0.4"/>
+    <xacro:property name="chassis_width" value="0.3"/>
+    <xacro:property name="chassis_height" value="0.1"/>
+
+    <!--轮子形态：普通圆柱轮，四轮同侧并联差速（skid-steer）-->
+    <xacro:property name="wheel_radius" value="0.05"/>
+    <xacro:property name="wheel_width" value="0.025"/>
+
+    <!--轮子位置-->
+    <xacro:property name="wheel_offset_x" value="${chassis_length / 2 - 0.05}"/>
+    <xacro:property name="wheel_offset_y" value="${chassis_width / 2 + wheel_width / 2}"/>
+    <xacro:property name="wheel_offset_z" value="-0.02"/>
+    <xacro:property name="wheel_separation" value="${2 * wheel_offset_y}"/>
+
+    <!--雷达形态-->
+    <xacro:property name="laser_radius" value="0.03"/>
+    <xacro:property name="laser_height" value="0.04"/>
+
+    <!--深度相机形态-->
+    <xacro:property name="camera_radius" value="0.03"/>
+    <xacro:property name="camera_height" value="0.04"/>
+
+    <!--机器人机身的物理属性-->
+    <xacro:macro name="inertial_box" params="mass l w h *origin">
+        <inertial>
+            <xacro:insert_block name="origin"/>
+            <mass value="${mass}"/>
+            <inertia ixx="${(1/12) * mass * (w*w + h*h)}" ixy="0.0" ixz="0.0"
+                    iyy="${(1/12) * mass * (l*l + h*h)}" iyz="0.0"
+                    izz="${(1/12) * mass * (l*l + w*w)}"/>
+        </inertial>
+    </xacro:macro>
+
+    <!--机器人轮胎的物理属性-->
+    <xacro:macro name="inertial_cylinder" params="mass r h *origin">
+        <inertial>
+            <xacro:insert_block name="origin"/>
+            <mass value="${mass}"/>
+            <inertia ixx="${(1/12) * mass * (3*r*r + h*h)}" ixy="0.0" ixz="0.0"
+                    iyy="${(1/12) * mass * (3*r*r + h*h)}" iyz="0.0"
+                    izz="${(1/2) * mass * r*r}"/>
+        </inertial>
+    </xacro:macro>
+
+    <!--声明材质颜色-->
+    <material name="blue">
+        <color rgba="0 0 1 1"/>
+    </material>
+    <material name="black">
+        <color rgba="0 0 0 1"/>
+    </material>
+    <material name="red">
+        <color rgba="1 0 0 1"/>
+    </material>
+
+    <!--机器人本体中心-->
+    <link name="base_link">
+        <visual>
+            <origin xyz="0 0 ${chassis_height / 2}" rpy="0 0 0"/>
+            <!--身体大小-->
+            <geometry>
+                <!--长方体-->
+                <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+            </geometry>
+            <material name="blue"/>
+        </visual>
+        <!--碰撞箱-->
+        <collision>
+            <origin xyz="0 0 ${chassis_height / 2}" rpy="0 0 0"/>
+            <!--身体大小-->
+            <geometry>
+                <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+            </geometry>
+        </collision>
+        <!--物理属性-->
+        <xacro:inertial_box mass="5.0" l="${chassis_length}" w="${chassis_width}" h="${chassis_height}">
+            <origin xyz="0 0 ${chassis_height / 2}" rpy="0 0 0"/>
+        </xacro:inertial_box>
+    </link>
+
+    <!--机器人中心在底面的投影-->
+    <link name="base_footprint"/>
+
+    <joint name="base_joint" type="fixed">
+        <parent link="base_footprint"/>
+        <child link="base_link"/>
+        <origin xyz="0 0 ${chassis_height/2 - wheel_offset_z}" rpy="0 0 0"/>
+    </joint>
+
+    <!--差速轮：圆柱体，接触摩擦按滚动轮设置（非麦轮各向异性）-->
+    <xacro:macro name="wheel" params="prefix reflect_x reflect_y">
+
+        <link name="${prefix}_wheel_link">
+            <visual>
+                <!--圆柱默认沿 z，绕 x 转 pi/2 后轮轴沿 y-->
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+                <geometry>
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                </geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+                <geometry>
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                </geometry>
+            </collision>
+            <xacro:inertial_cylinder mass="0.5" r="${wheel_radius}" h="${wheel_width}">
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+            </xacro:inertial_cylinder>
+        </link>
+
+        <joint name="${prefix}_wheel_joint" type="continuous">
+            <parent link="base_link"/>
+            <child link="${prefix}_wheel_link"/>
+            <origin xyz="${reflect_x * wheel_offset_x} ${reflect_y * wheel_offset_y} ${wheel_offset_z}" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit effort="50" velocity="50"/>
+            <dynamics damping="0.1" friction="0.1"/>
+        </joint>
+
+        <gazebo reference="${prefix}_wheel_link">
+            <!-- mu1 纵向抓地；mu2 稍低，四轮差速转弯时允许侧向滑移 -->
+            <mu1>1.0</mu1>
+            <mu2>0.2</mu2>
+            <kp>1000000.0</kp>
+            <kd>1.0</kd>
+        </gazebo>
+    </xacro:macro>
+
+    <xacro:wheel prefix="front_left" reflect_x="1" reflect_y="1"/>
+    <xacro:wheel prefix="front_right" reflect_x="1" reflect_y="-1"/>
+    <xacro:wheel prefix="rear_left" reflect_x="-1" reflect_y="1"/>
+    <xacro:wheel prefix="rear_right" reflect_x="-1" reflect_y="-1"/>
+
+    <!-- 虚拟 2D 扫描坐标系：实车没有独立 2D 雷达。
+         /scan 由 pointcloud_to_laserscan 从 Mid360 点云水平切片生成，
+         frame_id 固定为 laser_link，避免改 AMCL / SLAM Toolbox / costmap。 -->
+    <link name="laser_link">
+        <visual>
+            <geometry>
+                <cylinder radius="${laser_radius}" length="${laser_height}"/>
+            </geometry>
+            <material name="red"/>
+        </visual>
+        <xacro:inertial_cylinder mass="0.1" r="${laser_radius}" h="${laser_height}">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <joint name="laser_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="laser_link"/>
+        <origin xyz="0 0 ${chassis_height + laser_height / 2}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Mid360-style 3D LiDAR used by the LIO frontend. -->
+    <link name="livox_frame">
+        <visual>
+            <geometry>
+                <cylinder radius="0.04" length="0.05"/>
+            </geometry>
+            <material name="red"/>
+        </visual>
+        <xacro:inertial_cylinder mass="0.2" r="0.04" h="0.05">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <joint name="livox_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="livox_frame"/>
+        <origin xyz="0 0 0.12" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Keep the 3D LiDAR on its own SDF link instead of merging both lidars. -->
+    <gazebo reference="livox_joint">
+        <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+
+    <!--深度相机-->
+    <!--物理位置-->
+    <!-- <link name="camera_link">
+        <visual>
+            <geometry>
+                <cylinder radius="${laser_radius}" length="${laser_height}"/>
+            </geometry>
+            <material name="blue"/>
+        </visual>
+        <xacro:inertial_cylinder mass="0.1" r="${laser_radius}" h="${laser_height}">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_cylinder>
+    </link>
+
+    <joint name="camera_joint" type="fixed">
+        <parent link="base_link"/>
+        <child link="camera_link"/>
+        <origin xyz="0.2 0 ${chassis_height + laser_height / 2 - 0.06}" rpy="0 0 0"/>
+    </joint> -->
+
+    <!--imu-->
+    <link name = "imu_link">
+        <visual>
+            <geometry>
+                <box size = "0.02 0.02 0.02"/>
+            </geometry>
+            <material name = "black"/>
+        </visual>
+        <xacro:inertial_box mass="0.01" l="0.02" w="0.02" h="0.02">
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+        </xacro:inertial_box>
+    </link>
+
+    <joint name = "imu_joint" type = "fixed">
+        <parent link = "base_link"/>
+        <child link = "imu_link"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Mid360 CSV scan pattern with per-point timestamps for the LIO frontend. -->
+    <gazebo>
+        <plugin
+            filename="libmy_nav2_robot_mid360_gz_plugin.so"
+            name="my_nav2_robot::Mid360GzPlugin">
+            <tracking_link_name>livox_frame</tracking_link_name>
+            <sensor_pose>0 0 0 0 0 0</sensor_pose>
+            <frame_id>livox_frame</frame_id>
+            <topic>/livox/lidar</topic>
+            <csv_file_name>$(find my_nav2_robot)/config/mid360.csv</csv_file_name>
+            <samples_per_scan>20000</samples_per_scan>
+            <downsample>1</downsample>
+            <update_rate>10.0</update_rate>
+            <min_range>0.2</min_range>
+            <max_range>12.0</max_range>
+            <range_noise_stddev>0.005</range_noise_stddev>
+            <dropout_rate>0.0</dropout_rate>
+            <noise_seed>42</noise_seed>
+        </plugin>
+    </gazebo>
+
+    <!--深度相机插件-->
+    <!-- <gazebo reference="camera_link">
+        <sensor name="depth_camera" type="rgbd_camera">
+            <visualize>true</visualize>
+            <update_rate>10.0</update_rate> <!- 原10hz，到时候再改回来 ->
+            <topic>depth_camera</topic>
+            <gz_frame_id>camera_link</gz_frame_id>
+            <camera>
+                <horizontal_fov>1.047198</horizontal_fov>
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                    <format>R8G8B8</format>
+                </image>
+                <clip>
+                    <near>0.1</near>
+                    <far>5.0</far>
+                </clip>
+            </camera>
+        </sensor>
+    </gazebo> -->
+
+    <!-- 四轮差速：同侧前后轮并联。只响应 linear.x / angular.z。
+         轮式里程计发到 /wheel_odom、/wheel_tf，不占用 /tf，避免和 BIEVR-LIO 抢 odom TF。 -->
+    <gazebo>
+        <plugin
+            filename="gz-sim-diff-drive-system"
+            name="gz::sim::systems::DiffDrive">
+            <left_joint>front_left_wheel_joint</left_joint>
+            <right_joint>front_right_wheel_joint</right_joint>
+            <left_joint>rear_left_wheel_joint</left_joint>
+            <right_joint>rear_right_wheel_joint</right_joint>
+
+            <wheel_separation>${wheel_separation}</wheel_separation>
+            <wheel_radius>${wheel_radius}</wheel_radius>
+
+            <max_linear_velocity>1.0</max_linear_velocity>
+            <max_angular_velocity>1.5</max_angular_velocity>
+            <max_linear_acceleration>2.5</max_linear_acceleration>
+            <max_angular_acceleration>3.2</max_angular_acceleration>
+
+            <topic>/cmd_vel</topic>
+            <odom_topic>/wheel_odom</odom_topic>
+            <tf_topic>/wheel_tf</tf_topic>
+        </plugin>
+
+        <plugin
+            filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+            <topic>/joint_states</topic>
+        </plugin>
+    </gazebo>
+
+    <gazebo>
+        <plugin
+            filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+            <odom_topic>/ground_truth</odom_topic>  <!-- Ground truth is retained only for evaluation. -->
+            <odom_frame>odom</odom_frame>
+            <robot_base_frame>base_footprint</robot_base_frame>
+            <!-- SLAM 模式下由 ros_gz_bridge 将 gz /tf 桥接到 ROS /tf， -->
+            <!-- 给 slam_toolbox 提供 odom -> base_footprint。 -->
+            <!-- 导航模式下不桥接该 TF，避免和外部 BIEVR-LIO 冲突。 -->
+            <tf_topic>/tf</tf_topic>
+            <dimensions>3</dimensions>
+            <odom_publish_frequency>200</odom_publish_frequency>
+        </plugin>
+    </gazebo>
+</robot>

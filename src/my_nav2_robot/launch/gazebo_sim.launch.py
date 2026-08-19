@@ -12,11 +12,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_name = 'my_nav2_robot'
     pkg_share = get_package_share_directory(pkg_name)
-    xacro_file = os.path.join(pkg_share, 'urdf', 'robot.urdf.xacro')
+    mecanum_xacro = os.path.join(pkg_share, 'urdf', 'robot.urdf.xacro')
+    diff_xacro = os.path.join(pkg_share, 'urdf', 'robot_diff.urdf.xacro')
     map1_obstacles_file = os.path.join(
         pkg_share, 'models', 'map1_obstacles', 'model.sdf')
     culvert_file = os.path.join(pkg_share, 'models', 'culvert.sdf')
-    robot_description = Command(['xacro ', xacro_file])
 
     # 选择 Gazebo 中要生成的静态场景：
     #   scene:=culvert -> 4m 宽、2m 高、10m 长的涵洞两侧墙（不封底）
@@ -26,6 +26,11 @@ def generate_launch_description():
     use_gazebo_odom_tf = LaunchConfiguration('use_gazebo_odom_tf', default='false')
     spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
+    chassis = LaunchConfiguration('chassis', default='mecanum')
+    xacro_file = PythonExpression([
+        "'", diff_xacro, "' if '", chassis, "' == 'diff' else '", mecanum_xacro, "'"
+    ])
+    robot_description = Command(['xacro ', xacro_file])
 
     slam_arg = DeclareLaunchArgument(
         'slam',
@@ -54,6 +59,11 @@ def generate_launch_description():
         'spawn_map1_obstacles',
         default_value='true',
         description='Spawn map1 obstacles when scene is map1'
+    )
+    chassis_arg = DeclareLaunchArgument(
+        'chassis',
+        default_value='mecanum',
+        description='Chassis kinematics: mecanum (VelocityControl) or diff (DiffDrive)'
     )
 
     node_robot_state_publisher = Node(
@@ -178,6 +188,7 @@ def generate_launch_description():
         scene_arg,
         spawn_culvert_arg,
         spawn_map1_obstacles_arg,
+        chassis_arg,
         gazebo,
         spawn_entity,
         spawn_culvert_node,

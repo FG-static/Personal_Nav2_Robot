@@ -27,7 +27,15 @@ def generate_launch_description():
         "'True' if '", slam_mode, "' in ('true', 'True') else 'False'"
     ])
 
-    nav2_params_slam = os.path.join(pkg_project_bringup, 'config', 'nav2_params_slam.yaml')
+    chassis = LaunchConfiguration('chassis', default='mecanum')
+    nav2_params_slam_mecanum = os.path.join(
+        pkg_project_bringup, 'config', 'nav2_params_slam.yaml')
+    nav2_params_slam_diff = os.path.join(
+        pkg_project_bringup, 'config', 'nav2_params_slam_diff.yaml')
+    nav2_params_slam = PythonExpression([
+        "'", nav2_params_slam_diff, "' if '", chassis,
+        "' == 'diff' else '", nav2_params_slam_mecanum, "'"
+    ])
     nav2_params_nav = os.path.join(pkg_project_bringup, 'config', 'nav2_params_nav_diy.yaml')
 
     # 部分变量定义
@@ -93,7 +101,8 @@ def generate_launch_description():
             'use_gazebo_odom_tf': use_gazebo_odom_tf,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
-            'spawn_map1_obstacles': spawn_map1_obstacles
+            'spawn_map1_obstacles': spawn_map1_obstacles,
+            'chassis': chassis,
         }.items()
     )
     gazebo_sim_nav = IncludeLaunchDescription(
@@ -108,7 +117,8 @@ def generate_launch_description():
             'use_gazebo_odom_tf': use_gazebo_odom_tf,
             'scene': scene,
             'spawn_culvert': spawn_culvert,
-            'spawn_map1_obstacles': spawn_map1_obstacles
+            'spawn_map1_obstacles': spawn_map1_obstacles,
+            'chassis': chassis,
         }.items()
     )
 
@@ -186,6 +196,14 @@ def generate_launch_description():
             'map',
             default_value='',
             description='Explicit map YAML path; empty uses maps/<scene>.yaml'),
+        DeclareLaunchArgument(
+            'chassis',
+            default_value='mecanum',
+            description=(
+                'Chassis kinematics: mecanum (default) or diff. '
+                'diff uses robot_diff.urdf.xacro; with slam:=true also uses '
+                'nav2_params_slam_diff.yaml and DWA.'
+            )),
         gazebo_sim_slam,
         gazebo_sim_nav,
         static_tf_node,

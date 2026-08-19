@@ -36,9 +36,15 @@ namespace my_nav2_planner {
             node_, name_ + ".interpolation_resolution", rclcpp::ParameterValue(0.1));
         node_->get_parameter(name_ + ".interpolation_resolution", interpolation_resolution_);
         nav2_util::declare_parameter_if_not_declared(
-            node_, name_ + ".cost_threshold", rclcpp::ParameterValue(250));
+            node_, name_ + ".cost_threshold", rclcpp::ParameterValue(253));
         node_->get_parameter(name_ + ".cost_threshold", cost_threshold_);
         cost_threshold_ = std::clamp(cost_threshold_, 0, 253);
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name_ + ".obstacle_cost_weight", rclcpp::ParameterValue(6.0));
+        node_->get_parameter(name_ + ".obstacle_cost_weight", obstacle_cost_weight_);
+        if (obstacle_cost_weight_ < 0.0) {
+            obstacle_cost_weight_ = 0.0;
+        }
 
         //RCLCPP_INFO(node_->get_logger(), "自定义A*规划器配置完成");
     }
@@ -164,16 +170,22 @@ namespace my_nav2_planner {
                     int next_idx = ny * width + nx;
                     unsigned char cost = costmap_->getCost(nx, ny);
 
-                    // 障碍物仍然不可通行；未知区域根据开关决定是否与自由区域完全等价。
-                    // 超过阈值的成本视为障碍物，未知区域根据开关决定是否与自由区域完全等价。
+                    // 超过阈值（默认 inscribed/lethal）视为硬障碍。
+                    // 低于阈值的膨胀代价进入 g，未知区域按开关决定是否加罚。
                     if (cost >= cost_threshold_ &&
                         cost != nav2_costmap_2d::NO_INFORMATION)
                         continue;
 
                     double extra_cost = 0.0;
-                    if (cost == nav2_costmap_2d::NO_INFORMATION &&
-                        !treat_unknown_as_free_)
-                        extra_cost = unknown_cost_;
+                    if (cost == nav2_costmap_2d::NO_INFORMATION) {
+                        if (!treat_unknown_as_free_)
+                            extra_cost = unknown_cost_;
+                    } else {
+                        extra_cost = obstacle_cost_weight_ *
+                            static_cast<double>(cost) /
+                            static_cast<double>(
+                                nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+                    }
 
                     double step_cost = std::sqrt(dx * dx + dy * dy);
                     double tentative_g = g_values[cur_idx] + step_cost + extra_cost;
