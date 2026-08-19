@@ -29,6 +29,7 @@ def generate_launch_description():
 
     chassis = LaunchConfiguration('chassis', default='mecanum')
     gui = LaunchConfiguration('gui', default='true')
+    use_rviz = LaunchConfiguration('rviz', default='true')
     nav2_params_slam_mecanum = os.path.join(
         pkg_project_bringup, 'config', 'nav2_params_slam.yaml')
     nav2_params_slam_diff = os.path.join(
@@ -61,6 +62,11 @@ def generate_launch_description():
         "'", bt_xml_diff, "' if '", chassis,
         "' == 'diff' else '", bt_xml_mecanum, "'"
     ])
+    # Without BIEVR-LIO, Nav2 must read Gazebo wheel odometry.
+    odom_topic = PythonExpression([
+        "'/wheel_odom' if '", use_gazebo_odom_tf,
+        "' in ('true', 'True') else '/bievr_lio/odom'"
+    ])
     nav_params_with_pose = RewrittenYaml(
         source_file=nav2_params_nav,
         param_rewrites={
@@ -69,6 +75,7 @@ def generate_launch_description():
             'amcl.ros__parameters.initial_pose.z': '0.0',
             'amcl.ros__parameters.initial_pose.yaw': '0.0',
             'default_nav_to_pose_bt_xml': default_nav_to_pose_bt_xml,
+            'odom_topic': odom_topic,
         },
         convert_types=True,
     )
@@ -76,6 +83,7 @@ def generate_launch_description():
         source_file=nav2_params_slam,
         param_rewrites={
             'default_nav_to_pose_bt_xml': default_nav_to_pose_bt_xml,
+            'odom_topic': odom_topic,
         },
         convert_types=True,
     )
@@ -185,7 +193,8 @@ def generate_launch_description():
         name='rviz2',
         arguments=['-d', rviz_config_path],
         parameters=[{'use_sim_time': use_sim_time}],
-        output='screen'
+        output='screen',
+        condition=IfCondition(use_rviz),
     )
 
     return LaunchDescription([
@@ -227,6 +236,10 @@ def generate_launch_description():
             'gui',
             default_value='true',
             description='Run Gazebo Classic gzclient. Set false for headless tests.'),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='true',
+            description='Run RViz. Set false for headless tests.'),
         set_gazebo_model_path,
         gazebo_sim_slam,
         gazebo_sim_nav,

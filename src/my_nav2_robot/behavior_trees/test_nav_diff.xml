@@ -25,9 +25,10 @@
                           output_path="{path}"
                           goal="{goal}"
                           replan_event_topic="trajectory_generation/replan_event"/>
-        <!-- controller_id: DWB (official dwb_core) | FollowPath (custom DWA) | MPC | MPPI | DWA -->
+        <!-- slam:=False uses nav2_params_nav_diy.yaml, which has DWA but not DWB.
+             slam:=True + diff loads nav2_params_slam_diff.yaml, which also has DWA. -->
         <FollowPath path="{path}"
-                    controller_id="DWB"/>
+                    controller_id="DWA"/>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
