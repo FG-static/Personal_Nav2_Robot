@@ -18,7 +18,7 @@ def generate_launch_description():
         description='Use simulation (Gazebo) clock if true')
 
     node = Node(
-        package='pointcloud_to_laserscan',
+        package='my_nav2_robot',
         executable='pointcloud_to_laserscan_node',
         name='pointcloud_to_laserscan',
         output='screen',
