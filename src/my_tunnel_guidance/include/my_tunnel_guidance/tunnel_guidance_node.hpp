@@ -140,7 +140,7 @@ private:
     bool enable_auto_goal_ = false;
     std::string auto_goal_frame_id_ = "map";
     double min_goal_send_interval_ = 1.0;
-    double auto_goal_dwell_time_ = 8.0;
+    double auto_goal_dwell_time_ = 1.0;
 
     TunnelWallModel wall_model_;
     int calibration_valid_frames_ = 0;

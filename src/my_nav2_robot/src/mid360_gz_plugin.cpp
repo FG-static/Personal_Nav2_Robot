@@ -588,7 +588,12 @@ void Mid360GzPlugin::OnUpdate(const gazebo::common::UpdateInfo &info)
         return;
     }
 
-    const std::int64_t scan_duration_ns = now_ns - last_publish_ns_;
+    // Stamp the scan as the most recent 1/update_rate window, not the wall-clock
+    // gap since the last publish. If raycasting falls behind, using the real gap
+    // makes per-point `t` exceed 0.2 s; BIEVR then zeros those points and the
+    // LIO either drops the cloud or integrates IMU-only and diverges.
+    const std::int64_t scan_duration_ns = publish_period_ns;
+    const std::int64_t scan_start_ns = now_ns - publish_period_ns;
     const int scheduled_point_count =
         (samples_per_scan_ + downsample_ - 1) / downsample_;
     const std::vector<CollisionPrimitive> collisions = collectCollisionPrimitives();
@@ -650,7 +655,7 @@ void Mid360GzPlugin::OnUpdate(const gazebo::common::UpdateInfo &info)
             "Mid360 scan has no valid collision returns; check world collision geometry");
         warned_empty_scan_ = true;
     }
-    publishPointCloud(points, last_publish_ns_);
+    publishPointCloud(points, scan_start_ns);
 
     previous_sensor_pose_ = current_sensor_pose;
     last_publish_ns_ = now_ns;

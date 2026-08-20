@@ -75,7 +75,7 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     enable_auto_goal_ = declare_parameter("enable_auto_goal", false);
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
-    auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 8.0);
+    auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 1.0);
     auto_goal_candidate_count_ =
         declare_parameter(
             "auto_goal_candidate_count",

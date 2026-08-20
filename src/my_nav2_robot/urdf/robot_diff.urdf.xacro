@@ -96,8 +96,9 @@
         <origin xyz="0 0 ${chassis_height/2 - wheel_offset_z}" rpy="0 0 0"/>
     </joint>
 
-    <!--差速轮：圆柱体，接触摩擦按滚动轮设置（非麦轮各向异性）-->
-    <xacro:macro name="wheel" params="prefix reflect_x reflect_y">
+    <!-- Drive wheels: 2WD differential. Rear contacts are low-friction
+         supports. Four driven wheels overconstrain yaw in Gazebo ODE. -->
+    <xacro:macro name="drive_wheel" params="prefix reflect_x reflect_y">
 
         <link name="${prefix}_wheel_link">
             <visual>
@@ -109,9 +110,9 @@
                 <material name="black"/>
             </visual>
             <collision>
-                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
                 <geometry>
-                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                    <sphere radius="${wheel_radius}"/>
                 </geometry>
             </collision>
             <xacro:inertial_cylinder mass="0.5" r="${wheel_radius}" h="${wheel_width}">
@@ -125,22 +126,63 @@
             <origin xyz="${reflect_x * wheel_offset_x} ${reflect_y * wheel_offset_y} ${wheel_offset_z}" rpy="0 0 0"/>
             <axis xyz="0 1 0"/>
             <limit effort="50" velocity="50"/>
-            <dynamics damping="0.1" friction="0.1"/>
+            <dynamics damping="0.0" friction="0.0"/>
         </joint>
 
         <gazebo reference="${prefix}_wheel_link">
-            <!-- mu1 纵向抓地；mu2 稍低，四轮差速转弯时允许侧向滑移 -->
             <mu1>1.0</mu1>
-            <mu2>0.2</mu2>
-            <kp>1000000.0</kp>
-            <kd>1.0</kd>
+            <mu2>1.0</mu2>
+            <kp>200000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>0.1</maxVel>
         </gazebo>
     </xacro:macro>
 
-    <xacro:wheel prefix="front_left" reflect_x="1" reflect_y="1"/>
-    <xacro:wheel prefix="front_right" reflect_x="1" reflect_y="-1"/>
-    <xacro:wheel prefix="rear_left" reflect_x="-1" reflect_y="1"/>
-    <xacro:wheel prefix="rear_right" reflect_x="-1" reflect_y="-1"/>
+    <!-- Rear supports: same visual, ice-like contact so they do not fight yaw. -->
+    <xacro:macro name="support_wheel" params="prefix reflect_x reflect_y">
+
+        <link name="${prefix}_wheel_link">
+            <visual>
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+                <geometry>
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                </geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+                <geometry>
+                    <sphere radius="${wheel_radius}"/>
+                </geometry>
+            </collision>
+            <xacro:inertial_cylinder mass="0.2" r="${wheel_radius}" h="${wheel_width}">
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+            </xacro:inertial_cylinder>
+        </link>
+
+        <joint name="${prefix}_wheel_joint" type="fixed">
+            <parent link="base_link"/>
+            <child link="${prefix}_wheel_link"/>
+            <origin xyz="${reflect_x * wheel_offset_x} ${reflect_y * wheel_offset_y} ${wheel_offset_z}" rpy="0 0 0"/>
+        </joint>
+
+        <gazebo reference="${prefix}_wheel_link">
+            <mu1>0.02</mu1>
+            <mu2>0.02</mu2>
+            <slip1>0.2</slip1>
+            <slip2>0.2</slip2>
+            <kp>100000.0</kp>
+            <kd>10.0</kd>
+            <minDepth>0.001</minDepth>
+            <maxVel>0.1</maxVel>
+        </gazebo>
+    </xacro:macro>
+
+    <xacro:drive_wheel prefix="front_left" reflect_x="1" reflect_y="1"/>
+    <xacro:drive_wheel prefix="front_right" reflect_x="1" reflect_y="-1"/>
+    <xacro:support_wheel prefix="rear_left" reflect_x="-1" reflect_y="1"/>
+    <xacro:support_wheel prefix="rear_right" reflect_x="-1" reflect_y="-1"/>
 
     <!-- 虚拟 2D 扫描坐标系：实车没有独立 2D 雷达。
          /scan 由 my_nav2_robot 的 pointcloud_to_laserscan_node 从 Mid360 点云水平切片生成，
@@ -268,8 +310,7 @@
         </sensor>
     </gazebo> -->
 
-    <!-- 四轮差速（skid-steer）：gazebo_ros_diff_drive 用 num_wheel_pairs=2
-         同时驱动前后两对轮，同侧前后轮转速相同。
+    <!-- 两轮差速：只驱动前轴。后轴是低摩擦支撑轮，避免 Classic ODE 四轮锁死偏航。
          轮式里程计发到 /wheel_odom。publish_odom_tf 由 use_gazebo_odom_tf 控制。 -->
     <gazebo>
         <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
@@ -277,17 +318,14 @@
                 <remapping>cmd_vel:=cmd_vel</remapping>
                 <remapping>odom:=wheel_odom</remapping>
             </ros>
-            <num_wheel_pairs>2</num_wheel_pairs>
+            <num_wheel_pairs>1</num_wheel_pairs>
             <left_joint>front_left_wheel_joint</left_joint>
             <right_joint>front_right_wheel_joint</right_joint>
-            <left_joint>rear_left_wheel_joint</left_joint>
-            <right_joint>rear_right_wheel_joint</right_joint>
             <wheel_separation>${wheel_separation}</wheel_separation>
-            <wheel_separation>${wheel_separation}</wheel_separation>
-            <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
             <wheel_diameter>${2 * wheel_radius}</wheel_diameter>
             <max_wheel_torque>50</max_wheel_torque>
-            <max_wheel_acceleration>3.0</max_wheel_acceleration>
+            <max_wheel_acceleration>8.0</max_wheel_acceleration>
+            <update_rate>50</update_rate>
             <command_topic>cmd_vel</command_topic>
             <odometry_topic>wheel_odom</odometry_topic>
             <publish_odom>true</publish_odom>
@@ -303,8 +341,6 @@
             <update_rate>50</update_rate>
             <joint_name>front_left_wheel_joint</joint_name>
             <joint_name>front_right_wheel_joint</joint_name>
-            <joint_name>rear_left_wheel_joint</joint_name>
-            <joint_name>rear_right_wheel_joint</joint_name>
         </plugin>
         <plugin name="p3d_ground_truth" filename="libgazebo_ros_p3d.so">
             <ros>

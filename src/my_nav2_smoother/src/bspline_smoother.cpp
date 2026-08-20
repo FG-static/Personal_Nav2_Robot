@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <geometry_msgs/msg/quaternion.hpp>
 #include <nav2_util/node_utils.hpp>
 #include <rclcpp/parameter_value.hpp>
 #include <vector>
@@ -35,6 +36,13 @@ namespace my_bspline_smoother {
                a.upper_x >= b.upper_x &&
                a.lower_y <= b.lower_y &&
                a.upper_y >= b.upper_y;
+    }
+
+    double yawFromQuat(const geometry_msgs::msg::Quaternion &q)
+    {
+        const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+        const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+        return std::atan2(siny_cosp, cosy_cosp);
     }
 
     bool intersectsBox(const VisualBox &a, const VisualBox &b) {
@@ -323,25 +331,41 @@ namespace my_bspline_smoother {
         }
 
         const int n = static_cast<int>(smooth_path_x.size());
-        for (int i = 0; i < n; ++ i) {
+        // Snap endpoints to the planner start/goal. The QP pins them when a
+        // costmap exists; fallback corridors do not.
+        smooth_path_x.front() = ref_path_x.front();
+        smooth_path_y.front() = ref_path_y.front();
+        smooth_path_x.back() = ref_path_x.back();
+        smooth_path_y.back() = ref_path_y.back();
 
-            double yaw;
-
+        // Last A* cell is often a 5 cm grid step, not the tunnel heading.
+        // Keep the Nav2/tunnel goal yaw on the final pose, and estimate
+        // intermediate yaw from a chord long enough to ignore that hook.
+        const double goal_yaw = yawFromQuat(raw_path.poses.back().pose.orientation);
+        const double min_chord_sq = 0.25 * 0.25;
+        for (int i = 0; i < n; ++i) {
+            double yaw = goal_yaw;
             if (i < n - 1) {
-
-                yaw = std::atan2(smooth_path_y[i + 1] - smooth_path_y[i],
-                                smooth_path_x[i + 1] - smooth_path_x[i]);
-            } else {
-
-                yaw = std::atan2(smooth_path_y[i] - smooth_path_y[i - 1],
-                                smooth_path_x[i] - smooth_path_x[i - 1]);
+                int j = i + 1;
+                while (j < n - 1) {
+                    const double cdx = smooth_path_x[j] - smooth_path_x[i];
+                    const double cdy = smooth_path_y[j] - smooth_path_y[i];
+                    if (cdx * cdx + cdy * cdy >= min_chord_sq) {
+                        break;
+                    }
+                    ++j;
+                }
+                const double dx = smooth_path_x[j] - smooth_path_x[i];
+                const double dy = smooth_path_y[j] - smooth_path_y[i];
+                if (dx * dx + dy * dy > 1e-8) {
+                    yaw = std::atan2(dy, dx);
+                }
             }
 
-            // 更新位姿
             path.poses[i].pose.position.x = smooth_path_x[i];
             path.poses[i].pose.position.y = smooth_path_y[i];
             tf2::Quaternion q;
-            q.setRPY(0, 0, yaw); // Roll=0, Pitch=0, Yaw=yaw
+            q.setRPY(0, 0, yaw);
             path.poses[i].pose.orientation = tf2::toMsg(q);
         }
 
@@ -780,7 +804,9 @@ namespace my_bspline_smoother {
         }
         for (int i = 0; i < n; ++ i) {
 
-            if (i < 2 || i > n - 3) {
+            // Pin only the true start and goal. Pinning the last two A* cells
+            // copied a one-cell grid hook into the terminal tangent.
+            if (i == 0 || i == n - 1) {
 
                 bounds.lower_x[i] = p_ref_x[i];
                 bounds.upper_x[i] = p_ref_x[i];

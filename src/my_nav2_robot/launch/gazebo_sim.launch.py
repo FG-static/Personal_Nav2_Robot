@@ -7,6 +7,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _join_search_path(*chunks):
@@ -115,7 +116,10 @@ def generate_launch_description():
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[{'robot_description': robot_description, 'use_sim_time': True}]
+        parameters=[{
+            'robot_description': ParameterValue(robot_description, value_type=str),
+            'use_sim_time': True,
+        }]
     )
 
     gazebo = IncludeLaunchDescription(

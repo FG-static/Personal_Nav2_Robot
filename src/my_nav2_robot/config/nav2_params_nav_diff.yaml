@@ -40,7 +40,7 @@ amcl:
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
     sigma_hit: 0.2
-    tf_broadcast: true
+    tf_broadcast: false
     transform_tolerance: 1.0
     update_min_a: 0.2
     update_min_d: 0.1
@@ -128,7 +128,10 @@ bt_navigator_navigate_to_pose_rclcpp_node:
 controller_server:
   ros__parameters:
     use_sim_time: True
-    # 差速同时关心 XY 位置和最终朝向，使用 StoppedGoalChecker。
+    # Tunnel lookahead goals are points on the centerline, not docking poses.
+    # Require XY only: StoppedGoalChecker + tight yaw never completes because
+    # DWB does not in-place rotate after the B-spline tail, and the robot
+    # rarely fully stops.
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     # 差速无侧移，把小的 vy 噪声当成 0
@@ -136,7 +139,7 @@ controller_server:
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["stopped_goal_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath", "MPC", "MPPI", "DWA", "DWB"]
     odom_topic: /bievr_lio/odom
     use_realtime_priority: false
@@ -152,12 +155,10 @@ controller_server:
     #  xy_goal_tolerance: 0.25
     #  yaw_goal_tolerance: 0.25
     #  stateful: True
-    stopped_goal_checker:
-      plugin: "nav2_controller::StoppedGoalChecker"
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.15
-      trans_stopped_velocity: 0.05
-      rot_stopped_velocity: 0.05
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 6.28318530718
       stateful: True
     # BT 默认走 DWB；FollowPath 名称留给恢复/其它树，接到差速 DWA。
     FollowPath:
@@ -305,7 +306,7 @@ controller_server:
       decel_lim_y: 0.0
       decel_lim_theta: -3.2
       vx_samples: 20
-      vy_samples: 0
+      vy_samples: 1
       vtheta_samples: 40
       sim_time: 1.5
       linear_granularity: 0.05

@@ -81,10 +81,10 @@ def generate_launch_description():
         "'false' if '", use_ground_truth_odom, "' in ('true', 'True') else "
         "('true' if '", use_gazebo_odom_tf, "' in ('true', 'True') else 'false')"
     ])
-    amcl_tf_broadcast = PythonExpression([
-        "'False' if '", use_ground_truth_odom,
-        "' in ('true', 'True') else 'True'"
-    ])
+    # slam:=False always publishes static map->odom. AMCL must not broadcast the
+    # same transform or TF fights, global_costmap never finishes activating, and
+    # bt_navigator stays inactive so NavigateToPose rejects every goal.
+    amcl_tf_broadcast = PythonExpression(["'False'"])
     nav_params_with_pose = RewrittenYaml(
         source_file=nav2_params_nav,
         param_rewrites={
