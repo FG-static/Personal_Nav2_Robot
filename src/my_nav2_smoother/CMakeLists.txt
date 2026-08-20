@@ -64,6 +64,17 @@ target_link_libraries(${PROJECT_NAME}_lib
   G2O::all
   ${OpenCV_LIBS}
 )
+if(TARGET osqp::osqp)
+  get_target_property(_osqp_inc osqp::osqp INTERFACE_INCLUDE_DIRECTORIES)
+  if(_osqp_inc)
+    foreach(_inc IN LISTS _osqp_inc)
+      get_filename_component(_inc_parent "${_inc}" DIRECTORY)
+      if(EXISTS "${_inc_parent}/osqp/osqp.h")
+        target_include_directories(${PROJECT_NAME}_lib PRIVATE "${_inc_parent}")
+      endif()
+    endforeach()
+  endif()
+endif()
 
 pluginlib_export_plugin_description_file(nav2_core plugins.xml)
 

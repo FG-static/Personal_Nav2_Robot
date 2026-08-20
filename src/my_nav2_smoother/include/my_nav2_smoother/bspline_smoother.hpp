@@ -175,6 +175,11 @@ namespace my_bspline_smoother {
             std::vector<double> &dt_segment
         ) const;
 
+        // Humble CostmapSubscriber::getCostmap() recopies the full grid on
+        // every call. Cache one snapshot per smooth() so corridor queries
+        // do not copy a 1000x1000 map for every cell.
+        std::shared_ptr<nav2_costmap_2d::Costmap2D> getActiveCostmap() const;
+
         // 几何轨迹超调优化
         bool worldToMap(
             double wx,
@@ -289,6 +294,7 @@ namespace my_bspline_smoother {
         std::string name_;
         std::string path_frame_id_ = "map";
         std::shared_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_sub_;
+        mutable std::shared_ptr<nav2_costmap_2d::Costmap2D> active_costmap_;
         rclcpp_lifecycle::LifecyclePublisher<visualization_msgs::msg::MarkerArray>::SharedPtr
             corridor_marker_pub_;
     };

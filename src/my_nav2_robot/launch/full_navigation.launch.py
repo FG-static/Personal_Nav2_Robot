@@ -2,7 +2,6 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from nav2_common.launch import RewrittenYaml
-from launch.actions import SetEnvironmentVariable
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -30,7 +29,7 @@ def generate_launch_description():
         "'True' if '", slam_mode, "' in ('true', 'True') else 'False'"
     ])
 
-    chassis = LaunchConfiguration('chassis', default='mecanum')
+    chassis = LaunchConfiguration('chassis', default='diff')
     gui = LaunchConfiguration('gui', default='true')
     use_rviz = LaunchConfiguration('rviz', default='true')
     nav2_params_slam_mecanum = os.path.join(
@@ -41,7 +40,14 @@ def generate_launch_description():
         "'", nav2_params_slam_diff, "' if '", chassis,
         "' == 'diff' else '", nav2_params_slam_mecanum, "'"
     ])
-    nav2_params_nav = os.path.join(pkg_project_bringup, 'config', 'nav2_params_nav_diy.yaml')
+    nav2_params_nav_mecanum = os.path.join(
+        pkg_project_bringup, 'config', 'nav2_params_nav_diy.yaml')
+    nav2_params_nav_diff = os.path.join(
+        pkg_project_bringup, 'config', 'nav2_params_nav_diff.yaml')
+    nav2_params_nav = PythonExpression([
+        "'", nav2_params_nav_diff, "' if '", chassis,
+        "' == 'diff' else '", nav2_params_nav_mecanum, "'"
+    ])
 
     # 部分变量定义
     use_sim_time = LaunchConfiguration('use_sim_time', default = 'true')
@@ -106,11 +112,8 @@ def generate_launch_description():
         map_override, "'"
     ])
 
-    # Gazebo Classic model path: parent of models/culvert.sdf and models/map1_obstacles.
-    set_gazebo_model_path = SetEnvironmentVariable(
-        name='GAZEBO_MODEL_PATH',
-        value=os.path.join(pkg_project_bringup, 'models')
-    )
+    # Model path / DATABASE_URI are set in gazebo_sim.launch.py so empty.world
+    # can still resolve model://sun and model://ground_plane.
 
     # map->odom
     # 导航模式使用外部 LIO，手动发布静态 map->odom；
@@ -263,11 +266,11 @@ def generate_launch_description():
             description='Explicit map YAML path; empty uses maps/<scene>.yaml'),
         DeclareLaunchArgument(
             'chassis',
-            default_value='mecanum',
+            default_value='diff',
             description=(
-                'Chassis kinematics: mecanum (default) or diff. '
-                'diff uses robot_diff.urdf.xacro; with slam:=true also uses '
-                'nav2_params_slam_diff.yaml and DWA.'
+                'Chassis kinematics: diff (default) or mecanum. '
+                'diff uses robot_diff.urdf.xacro, test_nav_diff.xml and DWB. '
+                'mecanum uses planar_move, test_nav.xml and TEB.'
             )),
         DeclareLaunchArgument(
             'gui',
@@ -277,7 +280,6 @@ def generate_launch_description():
             'rviz',
             default_value='true',
             description='Run RViz. Set false for headless tests.'),
-        set_gazebo_model_path,
         gazebo_sim_slam,
         gazebo_sim_nav,
         static_tf_node,

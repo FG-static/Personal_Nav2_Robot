@@ -157,6 +157,21 @@ namespace my_bspline_smoother {
         corridor_marker_pub_.reset();
         RCLCPP_INFO(node_->get_logger(), "插件已清理");
     }
+    std::shared_ptr<nav2_costmap_2d::Costmap2D> MyBSplineSmoother::getActiveCostmap() const
+    {
+        if (active_costmap_) {
+            return active_costmap_;
+        }
+        if (!costmap_sub_) {
+            return nullptr;
+        }
+        try {
+            return costmap_sub_->getCostmap();
+        } catch (const std::exception &) {
+            return nullptr;
+        }
+    }
+
     bool MyBSplineSmoother::smooth(
         nav_msgs::msg::Path &path,
         const rclcpp::Duration &/*max_time*/
@@ -165,6 +180,26 @@ namespace my_bspline_smoother {
         const auto total_start_time = std::chrono::steady_clock::now();
         const nav_msgs::msg::Path input_path = path;
         last_solve_stats_ = BSplineSolveStats{};
+        active_costmap_.reset();
+        if (costmap_sub_) {
+            try {
+                active_costmap_ = costmap_sub_->getCostmap();
+            } catch (const std::exception &ex) {
+                RCLCPP_WARN(
+                    node_->get_logger(),
+                    "B-Spline: costmap unavailable at smooth start: %s",
+                    ex.what());
+            }
+        }
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "B-Spline: smoothing path with %zu poses",
+            path.poses.size());
+        struct ActiveCostmapGuard {
+            std::shared_ptr<nav2_costmap_2d::Costmap2D> &slot;
+            ~ActiveCostmapGuard() { slot.reset(); }
+        };
+        const ActiveCostmapGuard active_costmap_guard{active_costmap_};
         auto logMetrics =
             [&](bool success, double backend_ms) {
                 const auto smoothing_end_time = std::chrono::steady_clock::now();
@@ -173,7 +208,7 @@ namespace my_bspline_smoother {
                         smoothing_end_time - total_start_time).count();
 
                 const auto metrics_start_time = std::chrono::steady_clock::now();
-                const auto costmap = costmap_sub_ ? costmap_sub_->getCostmap() : nullptr;
+                const auto costmap = getActiveCostmap();
                 my_planning_metrics::ObstacleDistanceField distance_field;
                 const bool distance_ready =
                     costmap != nullptr && distance_field.build(costmap.get());
@@ -673,7 +708,7 @@ namespace my_bspline_smoother {
                 );
             return bounds;
         }
-        auto costmap = costmap_sub_->getCostmap();
+        auto costmap = getActiveCostmap();
         if (!costmap) {
 
             for (int i = 0; i < n; ++ i)
@@ -772,7 +807,7 @@ namespace my_bspline_smoother {
         if (!costmap_sub_)
             return boxes;
 
-        auto costmap = costmap_sub_->getCostmap();
+        auto costmap = getActiveCostmap();
         if (!costmap)
             return boxes;
 
@@ -920,7 +955,7 @@ namespace my_bspline_smoother {
         if (!costmap_sub_)
             return false;
 
-        auto costmap = costmap_sub_->getCostmap();
+        auto costmap = getActiveCostmap();
         if (!costmap)
             return false;
 
@@ -932,7 +967,7 @@ namespace my_bspline_smoother {
         if (!costmap_sub_ || mx < 0 || my < 0)
             return false;
 
-        auto costmap = costmap_sub_->getCostmap();
+        auto costmap = getActiveCostmap();
         if (!costmap)
             return false;
 
@@ -1046,7 +1081,7 @@ namespace my_bspline_smoother {
             return report;
         }
 
-        auto costmap = costmap_sub_->getCostmap();
+        auto costmap = getActiveCostmap();
         if (!costmap) {
 
             report.ok = false;
@@ -1218,7 +1253,7 @@ namespace my_bspline_smoother {
         if (!costmap_sub_)
             return;
 
-        auto costmap = costmap_sub_->getCostmap();
+        auto costmap = getActiveCostmap();
         if (!costmap)
             return;
 

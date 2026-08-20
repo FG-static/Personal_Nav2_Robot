@@ -9,6 +9,27 @@ from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
+def _join_search_path(*chunks):
+    parts = []
+    for chunk in chunks:
+        if not chunk:
+            continue
+        for item in str(chunk).split(os.pathsep):
+            if item and item not in parts:
+                parts.append(item)
+    return os.pathsep.join(parts)
+
+
+def _gazebo_classic_model_dirs():
+    dirs = []
+    for candidate in (
+            '/usr/share/gazebo-11/models',
+            '/usr/share/gazebo/models'):
+        if os.path.isdir(candidate):
+            dirs.append(candidate)
+    return dirs
+
+
 def generate_launch_description():
     pkg_name = 'my_nav2_robot'
     pkg_share = get_package_share_directory(pkg_name)
@@ -20,24 +41,26 @@ def generate_launch_description():
     culvert_file = os.path.join(pkg_share, 'models', 'culvert.sdf')
     empty_world = os.path.join(gazebo_ros_share, 'worlds', 'empty.world')
 
-    # Point Gazebo Classic at this package before gzserver reads os.environ.
+    # Package models + system Classic models (sun, ground_plane). Keep any
+    # existing GAZEBO_MODEL_PATH. Empty DATABASE_URI so gzserver does not
+    # block on models.gazebosim.org before /spawn_entity is advertised.
     model_path = os.path.join(pkg_share, 'models')
     plugin_path = os.path.normpath(os.path.join(pkg_share, '..', '..', 'lib'))
-    existing_model_path = os.environ.get('GAZEBO_MODEL_PATH', '')
-    existing_plugin_path = os.environ.get('GAZEBO_PLUGIN_PATH', '')
-    os.environ['GAZEBO_MODEL_PATH'] = (
-        model_path if not existing_model_path else
-        model_path + os.pathsep + existing_model_path)
-    os.environ['GAZEBO_PLUGIN_PATH'] = (
-        plugin_path if not existing_plugin_path else
-        plugin_path + os.pathsep + existing_plugin_path)
+    os.environ['GAZEBO_MODEL_PATH'] = _join_search_path(
+        model_path,
+        *_gazebo_classic_model_dirs(),
+        os.environ.get('GAZEBO_MODEL_PATH', ''))
+    os.environ['GAZEBO_PLUGIN_PATH'] = _join_search_path(
+        plugin_path,
+        os.environ.get('GAZEBO_PLUGIN_PATH', ''))
+    os.environ['GAZEBO_MODEL_DATABASE_URI'] = ''
 
     scene = LaunchConfiguration('scene', default='culvert')
     slam = LaunchConfiguration('slam', default='False')
     use_gazebo_odom_tf = LaunchConfiguration('use_gazebo_odom_tf', default='false')
     spawn_culvert = LaunchConfiguration('spawn_culvert', default='true')
     spawn_map1_obstacles = LaunchConfiguration('spawn_map1_obstacles', default='true')
-    chassis = LaunchConfiguration('chassis', default='mecanum')
+    chassis = LaunchConfiguration('chassis', default='diff')
     gui = LaunchConfiguration('gui', default='true')
     xacro_file = PythonExpression([
         "'", diff_xacro, "' if '", chassis, "' == 'diff' else '", mecanum_xacro, "'"
@@ -79,8 +102,8 @@ def generate_launch_description():
     )
     chassis_arg = DeclareLaunchArgument(
         'chassis',
-        default_value='mecanum',
-        description='Chassis kinematics: mecanum (planar_move) or diff (diff_drive)'
+        default_value='diff',
+        description='Chassis kinematics: diff (diff_drive, default) or mecanum (planar_move)'
     )
     gui_arg = DeclareLaunchArgument(
         'gui',
@@ -187,6 +210,7 @@ def generate_launch_description():
         gui_arg,
         SetEnvironmentVariable(name='GAZEBO_MODEL_PATH', value=os.environ['GAZEBO_MODEL_PATH']),
         SetEnvironmentVariable(name='GAZEBO_PLUGIN_PATH', value=os.environ['GAZEBO_PLUGIN_PATH']),
+        SetEnvironmentVariable(name='GAZEBO_MODEL_DATABASE_URI', value=''),
         gazebo,
         spawn_entity,
         spawn_culvert_node,

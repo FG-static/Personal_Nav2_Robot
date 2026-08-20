@@ -285,7 +285,7 @@ local_costmap:
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+          obstacle_min_range: 0.2
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -322,7 +322,7 @@ global_costmap:
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.0
+          obstacle_min_range: 0.2
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -382,7 +382,7 @@ behavior_server:
     drive_on_heading:
       plugin: "nav2_behaviors/DriveOnHeading"
     wait:
-      plugin: "nav2_behaviors/Wait"
+      plugin: "my_nav2_robot/WallWait"
     assisted_teleop:
       plugin: "nav2_behaviors/AssistedTeleop"
     local_frame: odom

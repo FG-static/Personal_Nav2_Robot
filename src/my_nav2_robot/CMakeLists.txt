@@ -19,9 +19,17 @@ find_package(sensor_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(tf2_eigen REQUIRED)
+find_package(fmt REQUIRED)
 find_package(gazebo_dev REQUIRED)
 find_package(gazebo_ros REQUIRED)
 find_package(ament_index_cpp REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(nav2_core REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(nav2_util REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_action REQUIRED)
 
 set(_mid360_csv "${CMAKE_CURRENT_SOURCE_DIR}/config/mid360.csv")
 if(NOT EXISTS "${_mid360_csv}")
@@ -64,6 +72,7 @@ ament_target_dependencies(odom_evaluator
     tf2_eigen
     Sophus
 )
+target_link_libraries(odom_evaluator fmt::fmt)
 
 target_include_directories(simulated_imu_publisher PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -109,7 +118,24 @@ target_link_libraries(my_nav2_robot_mid360_gz_plugin
   ${GAZEBO_LIBRARIES}
 )
 
-# 安装
+add_library(my_nav2_robot_wall_wait SHARED src/wall_wait.cpp)
+target_include_directories(my_nav2_robot_wall_wait PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(my_nav2_robot_wall_wait
+    rclcpp
+    rclcpp_lifecycle
+    rclcpp_action
+    nav2_core
+    nav2_msgs
+    nav2_util
+    nav2_costmap_2d
+    pluginlib
+    tf2_ros
+)
+pluginlib_export_plugin_description_file(nav2_core plugins.xml)
+
 install(TARGETS
   robot_driver
   odom_evaluator
@@ -118,10 +144,14 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(TARGETS my_nav2_robot_mid360_gz_plugin
+install(TARGETS my_nav2_robot_mid360_gz_plugin my_nav2_robot_wall_wait
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+)
+
+install(FILES plugins.xml
+  DESTINATION share/${PROJECT_NAME}
 )
 
 install(PROGRAMS

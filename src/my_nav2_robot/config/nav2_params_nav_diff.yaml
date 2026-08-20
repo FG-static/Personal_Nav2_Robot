@@ -1,0 +1,582 @@
+# Diff-drive nav params (chassis:=diff, slam:=False). Based on nav2_params_nav_diy.yaml.
+# Differences vs mecanum:
+#   - AMCL uses DifferentialMotionModel
+#   - FollowPath is custom DWA; BT test_nav_diff.xml uses official DWB
+#   - Goal checker requires yaw; velocity_smoother clamps vy to 0
+amcl:
+  ros__parameters:
+    set_initial_pose: True
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+    use_sim_time: True
+    alpha1: 0.05
+    alpha2: 0.05
+    alpha3: 0.05
+    alpha4: 0.05
+    alpha5: 0.05
+    base_frame_id: "base_footprint"
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: "map"
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    max_particles: 800
+    min_particles: 200
+    odom_frame_id: "odom"
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 2
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.1
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.0
+    z_short: 0.05
+    scan_topic: /scan
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /bievr_lio/odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    always_reload_bt_xml: true
+    default_nav_to_pose_bt_xml: ""
+    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
+    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
+    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
+    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+      - my_manage_trajectory_bt_node
+
+
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    # 差速同时关心 XY 位置和最终朝向，使用 StoppedGoalChecker。
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    # 差速无侧移，把小的 vy 噪声当成 0
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["stopped_goal_checker"]
+    controller_plugins: ["FollowPath", "MPC", "MPPI", "DWA", "DWB"]
+    odom_topic: /bievr_lio/odom
+    use_realtime_priority: false
+
+    # Progress checker parameters
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.2
+      movement_time_allowance: 15.0
+    # Goal checker parameters
+    #precise_goal_checker:
+    #  plugin: "nav2_controller::SimpleGoalChecker"
+    #  xy_goal_tolerance: 0.25
+    #  yaw_goal_tolerance: 0.25
+    #  stateful: True
+    stopped_goal_checker:
+      plugin: "nav2_controller::StoppedGoalChecker"
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.15
+      trans_stopped_velocity: 0.05
+      rot_stopped_velocity: 0.05
+      stateful: True
+    # BT 默认走 DWB；FollowPath 名称留给恢复/其它树，接到差速 DWA。
+    FollowPath:
+      plugin: "my_nav2_controller/MyDWAController"
+      alpha: 2.0
+      beta: 1.5
+      gamma: 1.0
+      unknown_cost_weight: 1.0
+      lookahead_dist: 0.8
+      max_v: 0.5
+      max_w: 1.5
+      lim_a: 2.5
+      lim_aw: 3.2
+      sim_time: 1.5
+      transform_tolerance: 0.1
+    MPC:
+      plugin: "my_mpc_controller/MyMPCController"
+      q_11: 30.0
+      q_22: 30.0
+      q_33: 30.0
+      r_11: 0.1
+      r_22: 0.1
+      r_33: 0.5
+      f_11: 60.0
+      f_22: 60.0
+      f_33: 60.0
+      v_max: 1.6
+      w_max: 1.0
+      a_v_max: 1.5
+      a_w_max: 1.0
+      n: 10
+      # 麦轮可以全向平移，当前场景不要求车身朝向，关闭路径航向跟踪。
+      # 如果目标带 yaw 且需要对准，再改回 true。
+      track_path_yaw: false
+      # 终点控制惩罚：越大越早减速、终点停得越稳
+      terminal_control_weight: 50.0
+      transform_tolerance: 0.1
+    MPPI:
+      plugin: "nav2_mppi_controller::MPPIController"
+      # 官方 MPPI 插件，使用 Omni 运动模型匹配麦克纳姆轮。
+      time_steps: 40
+      model_dt: 0.05
+      batch_size: 1000
+      iteration_count: 1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "Omni"
+
+      # 与手写 MPC 基本一致的动态约束
+      vx_max: 2.0
+      vx_min: -2.0
+      vy_max: 2.0
+      vy_min: -2.0
+      wz_max: 1.2
+      ax_max: 3.0
+      ax_min: -3.0
+      ay_max: 3.0
+      ay_min: -3.0
+      az_max: 1.5
+
+      # 采样噪声
+      vx_std: 0.25
+      vy_std: 0.25
+      wz_std: 0.25
+
+      prune_distance: 1.5
+      transform_tolerance: 0.1
+      visualize: true
+      regenerate_noises: true
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic",
+                "PathAlignCritic", "PathFollowCritic", "TwirlingCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        near_collision_cost: 253
+        critical_cost: 300.0
+        consider_footprint: false
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      # Omni 模型防止原地打转
+      TwirlingCritic:
+        enabled: true
+        twirling_cost_power: 1
+        twirling_cost_weight: 10.0
+
+    DWA:
+      plugin: "my_nav2_controller/MyDWAController"
+      alpha: 2.0
+      beta: 1.5
+      gamma: 1.0
+      unknown_cost_weight: 1.0
+      lookahead_dist: 0.8
+      max_v: 0.5
+      max_w: 1.5
+      lim_a: 2.5
+      lim_aw: 3.2
+      sim_time: 1.5
+      transform_tolerance: 0.1
+    DWB:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: false
+      trajectory_generator_name: "dwb_plugins::StandardTrajectoryGenerator"
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.5
+      max_vel_y: 0.0
+      max_vel_theta: 1.5
+      min_speed_xy: 0.0
+      max_speed_xy: 0.5
+      min_speed_theta: 0.0
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      vy_samples: 0
+      vtheta_samples: 40
+      sim_time: 1.5
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      rolling_window: true
+      # 决定 TEB 探查范围
+      width: 6
+      height: 6
+      resolution: 0.05
+      footprint: "[ [0.2, 0.2], [0.2, -0.2], [-0.2, -0.2], [-0.2, 0.2] ]"
+      plugins: ["voxel_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: True
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          # A relative topic will be appended to the parent of the local_costmap namespace.
+          # For example:
+          #   * User chosen namespace is `tb4`.
+          #   * User chosen topic is `scan`.
+          #   * Topic will be remapped to `/tb4/scan` without `local_costmap`.
+          #   * Use global topic `/scan` if you do not wish the node namespace to apply
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      robot_radius: 0.28
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          # A relative topic will be appended to the parent of the global_costmap namespace.
+          # For example:
+          #   * User chosen namespace is `tb4`.
+          #   * User chosen topic is `scan`.
+          #   * Topic will be remapped to `/tb4/scan` without `global_costmap`.
+          #   * Use global topic `/scan` if you do not wish the node namespace to apply
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+      always_send_full_costmap: True
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: ""
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    expected_planner_frequency: 1.0
+    planner_plugins: ["AStar", "RRTStar", "HybridAStar"]
+    AStar:
+      plugin: "my_nav2_planner/MyAStarPlanner"
+      unknown_cost: 5.0
+      treat_unknown_as_free: true
+      interpolation_resolution: 0.1
+      cost_threshold: 253 # 硬障碍：inscribed/lethal；膨胀区靠 obstacle_cost_weight
+      obstacle_cost_weight: 6.0
+    RRTStar:
+      plugin: "my_rrtstar_planner/MyRRTStarPlanner"
+      step_size: 0.25
+      max_iterations: 80000
+      search_radius: 2.0
+      goal_sample_rate: 0.1
+      goal_tolerance: 0.5
+      collision_check_resolution: 0.02
+      max_iterations_after_goal: 1000
+      allow_unknown: true
+      treat_unknown_as_free: false
+    HybridAStar:
+      plugin: "my_hybrid_astar_planner/MyHybridAStarPlanner"
+      unknown_cost: 5.0
+      treat_unknown_as_free: false
+      interpolation_resolution: 0.1
+      max_iterations: 80000
+      primitive_duration: 0.25
+      step_time: 0.025
+      yaw_bin_count: 36 # 朝向离散桶数
+      max_planning_time: 3.0
+      heuristic_grid_weight: 1.2 # h_2D 代价函数权重
+      heuristic_yaw_weight: 0.2 # 姿态误差启发权重，主要旋转代价转入 g
+      heuristic_goal_dist_weight: 0.4 # 目标欧氏距离启发权重
+      path_tangent_change_weight: 1.0 # 相邻路径切线变化惩罚权重
+      primitive_switch_weight: 0.2 # 切换不同运动原语的基础惩罚
+      direction_switch_weight: 0.5 # 平移和原地旋转模式切换惩罚
+      velocity_direction_change_weight: 1.5 # 连续平移速度方向变化惩罚
+      primitive_omega_change_weight: 0.3 # 相邻 primitive 角速度变化惩罚
+      goal_progress_weight: 1.3 # 远离目标的边代价惩罚
+      goal_direction_weight: 0.2 # 当前步移动方向偏离目标方向的边代价惩罚
+      angular_motion_weight: 0.3 # 旋转运动执行代价权重
+      primitive_translation_angle_count: 32 # 麦轮平移方向采样数量
+      primitive_omega_sample_count: 1 # omega 采样档位：1 表示只平移，3 表示 -max/0/max
+      primitive_speed_ratio: 1.0 # 平移 primitive 使用的最大速度比例
+      include_pure_rotation_primitives: true # 是否额外加入原地旋转 primitive
+      visualize_primitive_costs: true # 发布根节点下一周期所有 primitive 的代价分布
+      primitive_cost_frame: "base_link" # 调试图使用的机器人局部坐标系
+      primitive_cost_show_text: true # 显示 primitive 编号与最终 f 代价
+      primitive_cost_marker_z: 0.05 # 调试图相对局部坐标系的高度
+      primitive_cost_publish_rate: 5.0 # 实时局部代价刷新频率，0 表示仅在全局规划时发布
+      reuse_path_if_valid: true
+      immediate_replan_if_blocked: true
+      replan_time_threshold: 5.0
+      path_prune_distance: 0.15
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: True
+    smoother_plugins: ["simple_smoother", "esdf_g2o_smoother"]
+    simple_smoother:
+      plugin: "my_bspline_smoother/MyBSplineSmoother"
+      w_smooth: 13.0
+      w_guide: 0.4
+      max_outer_iterations: 4
+      corridor_max_expand_dist: 0.8
+      corridor_min_half_width: 0.05
+      corridor_collision_check_resolution: 0.03
+      visualize_corridor_boxes: true
+      allow_unknown: true
+      corridor_marker_z: 0.02
+      max_overshoot_constraints_per_iter: 20
+    esdf_g2o_smoother:
+      plugin: "my_nav2_smoother/EsdfG2oSmoother"
+      resample_resolution: 0.10
+      esdf_margin: 1.0
+      min_obstacle_dist: 0.20
+      weight_obstacle: 50.0
+      weight_anchor: 1.0
+      weight_smoothness: 25.0
+      weight_length: 1.0
+      no_iterations: 10
+      optimizer_verbose: false
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: True
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins:
+      ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "my_nav2_robot/WallWait"
+    assisted_teleop:
+      plugin: "nav2_behaviors/AssistedTeleop"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.5, 0.0, 1.5]
+    min_velocity: [-0.5, 0.0, -1.5]
+    max_accel: [3.0, 3.0, 4.0]
+    max_decel: [-3.0, -3.0, -4.0]
+    odom_topic: "/bievr_lio/odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+loopback_simulator:
+  ros__parameters:
+    use_sim_time: True
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    map_frame_id: "map"
+    scan_frame_id: "scan" # tb4_loopback_simulator.launch.py remaps to 'rplidar_link'
+    update_duration: 0.02

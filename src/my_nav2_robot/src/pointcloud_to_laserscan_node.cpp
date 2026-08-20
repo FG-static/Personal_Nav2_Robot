@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 #include <Eigen/Geometry>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
@@ -15,7 +16,7 @@ PointCloudToLaserScanNode::PointCloudToLaserScanNode()
 {
     target_frame_ = declare_parameter<std::string>("target_frame", "laser_link");
     transform_tolerance_ = declare_parameter<double>("transform_tolerance", 0.3);
-    min_height_ = declare_parameter<double>("min_height", -0.15);
+    min_height_ = declare_parameter<double>("min_height", 0.02);
     max_height_ = declare_parameter<double>("max_height", 0.40);
     angle_min_ = declare_parameter<double>("angle_min", -M_PI);
     angle_max_ = declare_parameter<double>("angle_max", M_PI);
@@ -25,6 +26,7 @@ PointCloudToLaserScanNode::PointCloudToLaserScanNode()
     range_max_ = declare_parameter<double>("range_max", 12.0);
     inf_epsilon_ = declare_parameter<double>("inf_epsilon", 1.0);
     use_inf_ = declare_parameter<bool>("use_inf", true);
+    accumulation_duration_ = declare_parameter<double>("accumulation_duration", 0.0);
 
     tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
     auto timer_interface = std::make_shared<tf2_ros::CreateTimerROS>(
@@ -40,13 +42,101 @@ PointCloudToLaserScanNode::PointCloudToLaserScanNode()
 
     RCLCPP_INFO(
         get_logger(),
-        "Projecting cloud_in to scan in frame '%s' (z in [%.3f, %.3f], range [%.2f, %.2f])",
-        target_frame_.c_str(), min_height_, max_height_, range_min_, range_max_);
+        "Projecting cloud_in to scan in frame '%s' (z in [%.3f, %.3f], range [%.2f, %.2f], "
+        "accumulate %.2fs)",
+        target_frame_.c_str(), min_height_, max_height_, range_min_, range_max_,
+        accumulation_duration_);
+}
+
+void PointCloudToLaserScanNode::projectCloud(
+    const sensor_msgs::msg::PointCloud2 &cloud_msg,
+    std::vector<float> &ranges) const
+{
+    Eigen::Isometry3d cloud_to_target = Eigen::Isometry3d::Identity();
+    const bool need_transform =
+        !target_frame_.empty() && target_frame_ != cloud_msg.header.frame_id;
+    if (need_transform) {
+        try {
+            const geometry_msgs::msg::TransformStamped transform =
+                tf_buffer_->lookupTransform(
+                    target_frame_,
+                    cloud_msg.header.frame_id,
+                    cloud_msg.header.stamp,
+                    tf2::durationFromSec(transform_tolerance_));
+            cloud_to_target = tf2::transformToEigen(transform);
+        } catch (const tf2::TransformException &) {
+            return;
+        }
+    }
+
+    const uint32_t ranges_size = static_cast<uint32_t>(ranges.size());
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(cloud_msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(cloud_msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(cloud_msg, "z");
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        Eigen::Vector3d point(static_cast<double>(*iter_x),
+            static_cast<double>(*iter_y), static_cast<double>(*iter_z));
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+            !std::isfinite(point.z())) {
+            continue;
+        }
+        if (need_transform) {
+            point = cloud_to_target * point;
+        }
+        if (point.z() > max_height_ || point.z() < min_height_) {
+            continue;
+        }
+
+        const double range = std::hypot(point.x(), point.y());
+        if (range < range_min_ || range > range_max_) {
+            continue;
+        }
+
+        const double angle = std::atan2(point.y(), point.x());
+        if (angle < angle_min_ || angle > angle_max_) {
+            continue;
+        }
+
+        int index = static_cast<int>((angle - angle_min_) / angle_increment_);
+        if (index < 0) {
+            index = 0;
+        } else if (index >= static_cast<int>(ranges_size)) {
+            index = static_cast<int>(ranges_size) - 1;
+        }
+        const auto bin = static_cast<size_t>(index);
+        if (!std::isfinite(ranges[bin]) || range < static_cast<double>(ranges[bin])) {
+            ranges[bin] = static_cast<float>(range);
+        }
+    }
 }
 
 void PointCloudToLaserScanNode::cloudCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &cloud_msg)
 {
+    const auto clock_type = get_clock()->get_clock_type();
+    const rclcpp::Time latest(cloud_msg->header.stamp, clock_type);
+    if (!cloud_buffer_.empty()) {
+        const rclcpp::Time previous(cloud_buffer_.back()->header.stamp, clock_type);
+        if (latest < previous) {
+            cloud_buffer_.clear();
+        }
+    }
+    cloud_buffer_.push_back(cloud_msg);
+    if (accumulation_duration_ <= 0.0) {
+        while (cloud_buffer_.size() > 1U) {
+            cloud_buffer_.pop_front();
+        }
+    } else {
+        while (!cloud_buffer_.empty()) {
+            const rclcpp::Time oldest(cloud_buffer_.front()->header.stamp, clock_type);
+            if ((latest - oldest).seconds() > accumulation_duration_) {
+                cloud_buffer_.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
     auto scan_msg = std::make_unique<sensor_msgs::msg::LaserScan>();
     scan_msg->header = cloud_msg->header;
     if (!target_frame_.empty()) {
@@ -72,66 +162,11 @@ void PointCloudToLaserScanNode::cloudCallback(
     if (use_inf_) {
         scan_msg->ranges.assign(ranges_size, std::numeric_limits<float>::infinity());
     } else {
-        scan_msg->ranges.assign(
-            ranges_size, static_cast<float>(scan_msg->range_max + inf_epsilon_));
+        scan_msg->ranges.assign(ranges_size, std::numeric_limits<float>::quiet_NaN());
     }
 
-    Eigen::Isometry3d cloud_to_target = Eigen::Isometry3d::Identity();
-    const bool need_transform =
-        !target_frame_.empty() && target_frame_ != cloud_msg->header.frame_id;
-    if (need_transform) {
-        try {
-            const geometry_msgs::msg::TransformStamped transform =
-                tf_buffer_->lookupTransform(
-                    target_frame_,
-                    cloud_msg->header.frame_id,
-                    cloud_msg->header.stamp,
-                    tf2::durationFromSec(transform_tolerance_));
-            cloud_to_target = tf2::transformToEigen(transform);
-        } catch (const tf2::TransformException &ex) {
-            RCLCPP_WARN_THROTTLE(
-                get_logger(), *get_clock(), 2000, "Transform failure: %s", ex.what());
-            return;
-        }
-    }
-
-    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud_msg, "x");
-    sensor_msgs::PointCloud2ConstIterator<float> iter_y(*cloud_msg, "y");
-    sensor_msgs::PointCloud2ConstIterator<float> iter_z(*cloud_msg, "z");
-    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
-        Eigen::Vector3d point(static_cast<double>(*iter_x),
-            static_cast<double>(*iter_y), static_cast<double>(*iter_z));
-        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) ||
-            !std::isfinite(point.z())) {
-            continue;
-        }
-        if (need_transform) {
-            point = cloud_to_target * point;
-        }
-        if (point.z() > max_height_ || point.z() < min_height_) {
-            continue;
-        }
-
-        const double range = std::hypot(point.x(), point.y());
-        if (range < range_min_ || range > range_max_) {
-            continue;
-        }
-
-        const double angle = std::atan2(point.y(), point.x());
-        if (angle < scan_msg->angle_min || angle > scan_msg->angle_max) {
-            continue;
-        }
-
-        int index = static_cast<int>(
-            (angle - scan_msg->angle_min) / scan_msg->angle_increment);
-        if (index < 0) {
-            index = 0;
-        } else if (index >= static_cast<int>(ranges_size)) {
-            index = static_cast<int>(ranges_size) - 1;
-        }
-        if (range < scan_msg->ranges[static_cast<size_t>(index)]) {
-            scan_msg->ranges[static_cast<size_t>(index)] = static_cast<float>(range);
-        }
+    for (const auto &cloud : cloud_buffer_) {
+        projectCloud(*cloud, scan_msg->ranges);
     }
 
     scan_publisher_->publish(std::move(scan_msg));

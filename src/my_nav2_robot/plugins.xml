@@ -1,0 +1,9 @@
+<library path="my_nav2_robot_wall_wait">
+  <class name="my_nav2_robot/WallWait"
+         type="my_nav2_robot::WallWait"
+         base_class_type="nav2_core::Behavior">
+    <description>
+      Wait on wall time and exit immediately when the action server deactivates.
+    </description>
+  </class>
+</library>

@@ -1,17 +1,27 @@
+set(_g2o_hints
+  /opt/ros/$ENV{ROS_DISTRO}/lib/${CMAKE_LIBRARY_ARCHITECTURE}
+  /opt/ros/$ENV{ROS_DISTRO}/lib
+  /opt/ros/$ENV{ROS_DISTRO}/include
+)
+
 find_path(G2O_INCLUDE_DIR
   NAMES g2o/core/sparse_optimizer.h
+  HINTS ${_g2o_hints}
 )
 
 find_library(G2O_CORE_LIBRARY
   NAMES g2o_core
+  HINTS ${_g2o_hints}
 )
 
 find_library(G2O_STUFF_LIBRARY
   NAMES g2o_stuff
+  HINTS ${_g2o_hints}
 )
 
 find_library(G2O_SOLVER_EIGEN_LIBRARY
   NAMES g2o_solver_eigen
+  HINTS ${_g2o_hints}
 )
 
 include(FindPackageHandleStandardArgs)
