@@ -123,6 +123,11 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     valid_pub_ = create_publisher<std_msgs::msg::Bool>("~/valid", rclcpp::QoS(1));
     exit_detected_pub_ = create_publisher<std_msgs::msg::Bool>(
         "~/exit_detected", rclcpp::QoS(1).reliable().transient_local());
+    capture_enable_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "/capture_enable", rclcpp::QoS(1).reliable().transient_local());
+    gimbal_sub_ = create_subscription<rm_interfaces::msg::Gimbal>(
+        "/tracker/gimbal", rclcpp::QoS(10),
+        std::bind(&TunnelGuidanceNode::onGimbal, this, std::placeholders::_1));
     left_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/left_points", rclcpp::SensorDataQoS());
     right_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -133,6 +138,7 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     std_msgs::msg::Bool exit_msg;
     exit_msg.data = false;
     exit_detected_pub_->publish(exit_msg);
+    setCaptureEnable(false);
 
     if (enable_auto_goal_) {
 
@@ -700,7 +706,7 @@ void TunnelGuidanceNode::publishResults(
                 waiting_for_auto_goal_result_ = false;
                 has_sent_auto_goal_ = false;
             }
-            auto_goal_dwelling_ = false;
+            resetInspectionHandshake();
             has_latest_auto_goal_ = false;
         } else {
 
@@ -715,7 +721,7 @@ void TunnelGuidanceNode::publishResults(
                 auto_goal_client_->async_cancel_all_goals();
                 waiting_for_auto_goal_result_ = false;
                 has_sent_auto_goal_ = false;
-                auto_goal_dwelling_ = false;
+                resetInspectionHandshake();
             }
         }
     }
@@ -798,8 +804,27 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
             return;
         }
-        RCLCPP_INFO(get_logger(), "Auto goal dwell finished, sending next lookahead");
+        setCaptureEnable(false);
         auto_goal_dwelling_ = false;
+        waiting_for_mcu_capture_ = true;
+        mcu_capture_done_ = false;
+        RCLCPP_INFO(
+            get_logger(),
+            "Auto goal dwell finished, capture_enable=false, waiting for MCU capture_done");
+        return;
+    }
+
+    if (waiting_for_mcu_capture_) {
+
+        if (!mcu_capture_done_) {
+
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), mutable_clock(*this), 2000,
+                "Waiting for MCU capture_done before next inspection goal");
+            return;
+        }
+        RCLCPP_INFO(get_logger(), "MCU capture_done, sending next lookahead");
+        waiting_for_mcu_capture_ = false;
         has_sent_auto_goal_ = false;
         auto_goal_candidate_index_ = 0;
     }
@@ -906,28 +931,56 @@ void TunnelGuidanceNode::autoGoalResultCallback(
 
         case rclcpp_action::ResultCode::SUCCEEDED:
             auto_goal_dwelling_ = true;
+            waiting_for_mcu_capture_ = false;
+            mcu_capture_done_ = false;
             dwell_start_time_ = get_clock()->now();
             auto_goal_candidate_index_ = 0;
+            setCaptureEnable(true);
             RCLCPP_INFO(
                 get_logger(),
-                "Auto goal succeeded, dwelling for %.1f s",
+                "Auto goal succeeded, capture_enable=true, dwelling for %.1f s",
                 auto_goal_dwell_time_);
             break;
         case rclcpp_action::ResultCode::ABORTED:
             RCLCPP_WARN(get_logger(), "Auto goal aborted, trying next candidate");
             has_sent_auto_goal_ = false;
+            resetInspectionHandshake();
             advanceAutoGoalCandidate();
             break;
         case rclcpp_action::ResultCode::CANCELED:
             RCLCPP_INFO(get_logger(), "Auto goal canceled");
             has_sent_auto_goal_ = false;
-            auto_goal_dwelling_ = false;
+            resetInspectionHandshake();
             break;
         default:
             has_sent_auto_goal_ = false;
-            auto_goal_dwelling_ = false;
+            resetInspectionHandshake();
             break;
     }
+}
+
+void TunnelGuidanceNode::onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg)
+{
+    if (waiting_for_mcu_capture_ && msg->capture_done && !mcu_capture_done_) {
+
+        mcu_capture_done_ = true;
+        RCLCPP_INFO(get_logger(), "Received MCU capture_done=true");
+    }
+}
+
+void TunnelGuidanceNode::setCaptureEnable(bool enable)
+{
+    std_msgs::msg::Bool msg;
+    msg.data = enable;
+    capture_enable_pub_->publish(msg);
+}
+
+void TunnelGuidanceNode::resetInspectionHandshake()
+{
+    auto_goal_dwelling_ = false;
+    waiting_for_mcu_capture_ = false;
+    mcu_capture_done_ = false;
+    setCaptureEnable(false);
 }
 
 void TunnelGuidanceNode::advanceAutoGoalCandidate() {

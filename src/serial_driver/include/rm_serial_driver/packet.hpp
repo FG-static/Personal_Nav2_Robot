@@ -4,58 +4,59 @@
 #ifndef RM_SERIAL_DRIVER__PACKET_HPP_
 #define RM_SERIAL_DRIVER__PACKET_HPP_
 
+#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <vector>
 
 namespace rm_serial_driver
 {
-    // 帧格式（imu_coordinate.md）:
-    //   SOF0(1) + SOF1(1) + seq(1) + len(1) + payload(46) + CRC16-CCITT(2) = 52 bytes
-    static constexpr uint8_t  FRAME_SOF0        = 0xA5;
-    static constexpr uint8_t  FRAME_SOF1        = 0x5A;
-    static constexpr uint8_t  FRAME_PAYLOAD_LEN = 46;
-    static constexpr size_t   FRAME_TOTAL_LEN   = 52;  // 2+1+1+46+2
+// InterfaceNotice.md：0xAA + payload + 0x55，无 len / seq / CRC。小端、1 字节对齐。
+// 线上布尔量为 uint8_t：0=false，1=true。
+static constexpr uint8_t FRAME_HEADER = 0xAA;
+static constexpr uint8_t FRAME_TAIL = 0x55;
 
-    // payload 内存布局：u32 t_ms + 10×f32 + u16 flags = 4+40+2 = 46 bytes
-    struct ReceivePacket
-    {
-        uint32_t t_ms;     // MCU 时间戳 ms
+inline uint8_t boolToU8(bool value)
+{
+  return value ? 1U : 0U;
+}
 
-        float w_fl;        // 前左轮角速度 rad/s (ESC ID 2)
-        float w_fr;        // 前右轮角速度 rad/s (ESC ID 1)
-        float w_rl;        // 后左轮角速度 rad/s (ESC ID 3)
-        float w_rr;        // 后右轮角速度 rad/s (ESC ID 4)
+#pragma pack(push, 1)
+// 电控 → 上位机
+struct ReceiveFrame
+{
+  uint8_t header = FRAME_HEADER;
+  uint32_t temp = 0;
+  uint8_t capture_done = 0;  // 0/1
+  uint8_t tail = FRAME_TAIL;
+};
 
-        float gyro_x;      // 底盘车体系角速度 rad/s
-        float gyro_y;
-        float gyro_z;
+// 上位机 → 电控
+struct SendFrame
+{
+  uint8_t header = FRAME_HEADER;
+  float vx = 0.f;              // m/s
+  float wz = 0.f;              // rad/s
+  uint8_t capture_enable = 0;  // 0/1，到位停留期间为 1
+  uint8_t tail = FRAME_TAIL;
+};
+#pragma pack(pop)
 
-        float acc_x;       // 底盘车体系加速度 m/s^2
-        float acc_y;
-        float acc_z;
+static constexpr size_t RX_FRAME_LEN = 7;
+static constexpr size_t TX_FRAME_LEN = 11;
+static_assert(sizeof(ReceiveFrame) == RX_FRAME_LEN, "RX frame size mismatch with protocol");
+static_assert(sizeof(SendFrame) == TX_FRAME_LEN, "TX frame size mismatch with protocol");
 
-        uint16_t flags;    // 有效性/故障状态位（与电控确认 bit 定义）
-    } __attribute__((packed));
+template<typename FrameT>
+inline std::vector<uint8_t> toVector(const FrameT & data)
+{
+  std::vector<uint8_t> packet(sizeof(FrameT));
+  std::copy(
+    reinterpret_cast<const uint8_t *>(&data),
+    reinterpret_cast<const uint8_t *>(&data) + sizeof(FrameT), packet.begin());
+  return packet;
+}
 
-    static_assert(sizeof(ReceivePacket) == 46, "ReceivePacket size mismatch with protocol");
+}  // namespace rm_serial_driver
 
-    struct SendPacket
-    {
-        uint8_t header = 0xFF;
-        uint8_t test;      // 0～255，通信测试
-        uint8_t checksum = 0xFE;
-    } __attribute__((packed));
-
-    inline std::vector<uint8_t> toVector(const SendPacket &data)
-    {
-        std::vector<uint8_t> packet(sizeof(SendPacket));
-        std::copy(
-            reinterpret_cast<const uint8_t *>(&data),
-            reinterpret_cast<const uint8_t *>(&data) + sizeof(SendPacket), packet.begin());
-        return packet;
-    }
-
-} // namespace rm_serial_driver
-
-#endif // RM_SERIAL_DRIVER__PACKET_HPP_
+#endif  // RM_SERIAL_DRIVER__PACKET_HPP_

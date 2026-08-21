@@ -17,6 +17,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(rm_interfaces REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -74,6 +75,7 @@ ament_target_dependencies(tunnel_guidance_node
     geometry_msgs
     nav_msgs
     std_msgs
+    rm_interfaces
     visualization_msgs
     tf2
     tf2_ros
@@ -101,7 +103,7 @@ install(DIRECTORY config launch
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_geometry ${PROJECT_NAME}_timing)
-ament_export_dependencies(rclcpp rclcpp_action nav2_msgs sensor_msgs geometry_msgs nav_msgs std_msgs visualization_msgs tf2 tf2_ros tf2_eigen tf2_geometry_msgs pcl_conversions Eigen3)
+ament_export_dependencies(rclcpp rclcpp_action nav2_msgs sensor_msgs geometry_msgs nav_msgs std_msgs rm_interfaces visualization_msgs tf2 tf2_ros tf2_eigen tf2_geometry_msgs pcl_conversions Eigen3)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)

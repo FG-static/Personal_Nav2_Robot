@@ -1,8 +1,14 @@
 /**:
   ros__parameters:
-    device_name: /tmp/ttyACM0
+    device_name: /dev/ttyACM0
     baud_rate: 115200
     flow_control: none
     parity: none
     stop_bits: "1"
-
+    cmd_vel_topic: /cmd_vel
+    chassis_cmd_topic: /chassis_cmd
+    capture_enable_topic: /capture_enable
+    # 按锁存的最新速度周期发给电控；与 DWB controller_frequency 对齐
+    cmd_send_hz: 20.0
+    # 超过该时间未收到 /cmd_vel 或 /chassis_cmd 则下发 vx=0, wz=0
+    cmd_timeout_sec: 0.3

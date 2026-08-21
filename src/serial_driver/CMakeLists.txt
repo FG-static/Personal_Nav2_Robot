@@ -29,7 +29,6 @@ find_package(rm_interfaces REQUIRED)
 
 ament_auto_add_library(${PROJECT_NAME}_lib SHARED
   src/rm_serial_driver.cpp
-  src/crc.cpp
 )
 
 rclcpp_components_register_node(${PROJECT_NAME}_lib

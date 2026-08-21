@@ -11,21 +11,35 @@
 #include <serial_driver/serial_driver.hpp>
 
 // C++ system
-#include <array>
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
-#include <cstring>
+#include <cstdio>
 #include <functional>
-#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
-#include "rm_serial_driver/crc.hpp"
 #include "rm_serial_driver/packet.hpp"
 #include "rm_serial_driver/rm_serial_driver.hpp"
 
 namespace rm_serial_driver
 {
+namespace
+{
+std::string toHex(const std::vector<uint8_t> & data)
+{
+  std::string out;
+  out.reserve(data.size() * 3);
+  char buf[4];
+  for (size_t i = 0; i < data.size(); ++i) {
+    std::snprintf(buf, sizeof(buf), "%s%02X", i == 0 ? "" : " ", data[i]);
+    out += buf;
+  }
+  return out;
+}
+}  // namespace
 
 RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
 : Node("serial_driver", options),
@@ -38,9 +52,17 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
 
   // publisher/subscriber 必须在接收线程启动前初始化，否则线程调用 publish() 时
   // gimbal_pub_ 还是空指针，导致 SIGSEGV
-  target_sub_ = this->create_subscription<rm_interfaces::msg::Target>(
-    "/tracker/target", rclcpp::SensorDataQoS(),
-    std::bind(&RMSerialDriver::sendData, this, std::placeholders::_1));
+  cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+    cmd_vel_topic_, rclcpp::QoS(1),
+    std::bind(&RMSerialDriver::onCmdVel, this, std::placeholders::_1));
+
+  chassis_cmd_sub_ = this->create_subscription<rm_interfaces::msg::Target>(
+    chassis_cmd_topic_, rclcpp::QoS(1),
+    std::bind(&RMSerialDriver::onChassisCmd, this, std::placeholders::_1));
+
+  capture_enable_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+    capture_enable_topic_, rclcpp::QoS(1).reliable().transient_local(),
+    std::bind(&RMSerialDriver::onCaptureEnable, this, std::placeholders::_1));
 
   gimbal_pub_ = this->create_publisher<rm_interfaces::msg::Gimbal>(
     "/tracker/gimbal", 10);
@@ -49,17 +71,36 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     serial_driver_->init_port(device_name_, *device_config_);
     if (!serial_driver_->port()->is_open()) {
       serial_driver_->port()->open();
-      receive_thread_ = std::thread(&RMSerialDriver::receiveData, this);
     }
+    receive_thread_ = std::thread(&RMSerialDriver::receiveData, this);
+    RCLCPP_INFO(
+      get_logger(),
+      "Opened %s. TX: AA + vx + wz + capture_enable + 55 (%zu B). "
+      "RX: AA + temp + capture_done + 55 (%zu B). cmd_vel=%s chassis_cmd=%s capture_enable=%s",
+      device_name_.c_str(), TX_FRAME_LEN, RX_FRAME_LEN,
+      cmd_vel_topic_.c_str(), chassis_cmd_topic_.c_str(), capture_enable_topic_.c_str());
   } catch (const std::exception & ex) {
     RCLCPP_ERROR(
       get_logger(), "Error creating serial port: %s - %s", device_name_.c_str(), ex.what());
     throw ex;
   }
+
+  if (cmd_send_hz_ > 0.0) {
+    const auto period = std::chrono::duration<double>(1.0 / cmd_send_hz_);
+    cmd_tx_timer_ = this->create_wall_timer(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+      std::bind(&RMSerialDriver::sendCmdTick, this));
+    RCLCPP_INFO(
+      get_logger(), "Chassis TX %.1f Hz, timeout %.2f s", cmd_send_hz_, cmd_timeout_sec_);
+  }
 }
 
 RMSerialDriver::~RMSerialDriver()
 {
+  if (cmd_tx_timer_) {
+    cmd_tx_timer_->cancel();
+  }
+
   if (receive_thread_.joinable()) {
     receive_thread_.join();
   }
@@ -75,93 +116,47 @@ RMSerialDriver::~RMSerialDriver()
 
 void RMSerialDriver::receiveData()
 {
-  // 帧格式：
-  // [A5][5A][seq:1][len:1][payload:46][CRC16-CCITT:2] = 52 bytes
-  // CRC 覆盖前 50 字节（包含帧头），小端序存储在帧尾。
-  //
-  // 解帧策略：逐字节扫描找 A5 5A，再读剩余 50 字节，
-  // 校验 len 字段与 CRC16-CCITT，通过后用 memcpy 解析 payload。
-  // 若 len 或 CRC 不匹配则丢弃本次同步点，重新扫描。
-
+  // RX：0xAA + uint32 Temp + uint8 capture_done + 0x55。Linux CDC 可能拆包，搜帧头后再读满。
   std::vector<uint8_t> hdr(1);
-  // rest = seq(1) + len(1) + payload(46) + CRC16(2) = 50 bytes
-  std::vector<uint8_t> rest(FRAME_TOTAL_LEN - 2);
+  std::vector<uint8_t> rest(RX_FRAME_LEN - 1);
 
   while (rclcpp::ok()) {
     try {
-      // ---- 找帧头第一字节 A5 ----
       serial_driver_->port()->receive(hdr);
-      if (hdr[0] != FRAME_SOF0) {
+      if (hdr[0] != FRAME_HEADER) {
         continue;
       }
 
-      // ---- 确认帧头第二字节 5A ----
-      serial_driver_->port()->receive(hdr);
-      if (hdr[0] != FRAME_SOF1) {
-        // 当前字节可能是下一帧的 A5，不丢弃——但 serial API 不支持 unread，
-        // 直接 continue 重新扫描（最多丢一个同步机会，CRC 兜底）
-        continue;
-      }
-
-      // ---- 读剩余 50 字节（port阻塞直到全部到达）----
       serial_driver_->port()->receive(rest);
-
-      // ---- 校验 len 字段（rest[1] 即 frame[3]）----
-      if (rest[1] != FRAME_PAYLOAD_LEN) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 200,
-          "len field mismatch: got %u, expected %u", rest[1], FRAME_PAYLOAD_LEN);
+      if (rest.back() != FRAME_TAIL) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 200,
+          "frame tail mismatch: got 0x%02X", rest.back());
         continue;
       }
 
-      // ---- 拼完整帧，做 CRC16-CCITT 校验 ----
-      // frame = [A5, 5A, rest[0..49]]，共 52 字节
-      // CRC 覆盖 frame[0..49]（前 50 字节），CRC 值存于 frame[50..51]（小端）
-      std::array<uint8_t, FRAME_TOTAL_LEN> frame;
-      frame[0] = FRAME_SOF0;
-      frame[1] = FRAME_SOF1;
-      std::copy(rest.begin(), rest.end(), frame.begin() + 2);
-
-      const uint16_t rx_crc =
-        static_cast<uint16_t>(frame[FRAME_TOTAL_LEN - 2]) |
-        (static_cast<uint16_t>(frame[FRAME_TOTAL_LEN - 1]) << 8);
-      const uint16_t calc_crc =
-        crc16::Calc_CRC16_CCITT(frame.data(), FRAME_TOTAL_LEN - 2);
-
-      if (rx_crc != calc_crc) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 200,
-          "CRC mismatch: rx=0x%04X calc=0x%04X", rx_crc, calc_crc);
+      ReceiveFrame frame{};
+      frame.header = FRAME_HEADER;
+      std::copy(rest.begin(), rest.end(), reinterpret_cast<uint8_t *>(&frame) + 1);
+      if (frame.tail != FRAME_TAIL) {
         continue;
       }
 
-      // ---- 解析 payload（frame[4..49]）----
-      ReceivePacket packet;
-      std::memcpy(&packet, frame.data() + 4, sizeof(ReceivePacket));
-
-      // TODO: 与电控确认 flags bit 定义后启用有效位检查
-      // if (!(packet.flags & 0x0001U)) {
-      //   RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 200, "IMU data invalid");
-      //   continue;
-      // }
-
-      // ---- 填充并发布 Gimbal 消息 ----
       rm_interfaces::msg::Gimbal gimbal_msg;
-      gimbal_msg.header.stamp = this->get_clock()->now(); // ROS 生态（TF/odom）用
-      gimbal_msg.t_ms = packet.t_ms;                      // MCU 采样戳，供 ESKF 算 dt
-
-      gimbal_msg.angular_velocity.x  = packet.gyro_x;
-      gimbal_msg.angular_velocity.y  = packet.gyro_y;
-      gimbal_msg.angular_velocity.z  = packet.gyro_z;
-      gimbal_msg.linear_acceleration.x = packet.acc_x;
-      gimbal_msg.linear_acceleration.y = packet.acc_y;
-      gimbal_msg.linear_acceleration.z = packet.acc_z;
-      // wheel_velocity 借用 Quaternion 的四个字段：1-x=fl, 2-y=fr, 3-z=rl, 4-w=rr
-      gimbal_msg.wheel_velocity.x = packet.w_fl;
-      gimbal_msg.wheel_velocity.y = packet.w_fr;
-      gimbal_msg.wheel_velocity.z = packet.w_rl;
-      gimbal_msg.wheel_velocity.w = packet.w_rr;
-
+      gimbal_msg.header.stamp = this->get_clock()->now();
+      gimbal_msg.temp = frame.temp;
+      if (frame.capture_done == 0U || frame.capture_done == 1U) {
+        gimbal_msg.capture_done = (frame.capture_done == 1U);
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "illegal capture_done=%u, expected 0 or 1", frame.capture_done);
+      }
       gimbal_pub_->publish(gimbal_msg);
 
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "RX temp=%u capture_done=%u", frame.temp, frame.capture_done);
     } catch (const std::exception & ex) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 20, "Error while receiving data: %s", ex.what());
@@ -170,29 +165,86 @@ void RMSerialDriver::receiveData()
   }
 }
 
-
-
-
-void RMSerialDriver::sendData(const rm_interfaces::msg::Target::SharedPtr msg)
+void RMSerialDriver::onCmdVel(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
-  
+  latchCommand(static_cast<float>(msg->linear.x), static_cast<float>(msg->angular.z));
+}
 
+void RMSerialDriver::onChassisCmd(const rm_interfaces::msg::Target::SharedPtr msg)
+{
+  latchCommand(msg->vx, msg->wz);
+  latchCaptureEnable(msg->capture_enable);
+}
+
+void RMSerialDriver::onCaptureEnable(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  latchCaptureEnable(msg->data);
+}
+
+void RMSerialDriver::latchCommand(float vx, float wz)
+{
+  std::lock_guard<std::mutex> lock(cmd_mutex_);
+  vx_ = vx;
+  wz_ = wz;
+  last_cmd_time_ = this->now();
+  has_cmd_ = true;
+}
+
+void RMSerialDriver::latchCaptureEnable(bool enable)
+{
+  std::lock_guard<std::mutex> lock(cmd_mutex_);
+  capture_enable_ = enable;
+}
+
+void RMSerialDriver::sendCmdTick()
+{
+  float vx = 0.f;
+  float wz = 0.f;
+  bool capture_enable = false;
+  {
+    std::lock_guard<std::mutex> lock(cmd_mutex_);
+    if (has_cmd_ && (this->now() - last_cmd_time_).seconds() <= cmd_timeout_sec_) {
+      vx = vx_;
+      wz = wz_;
+    }
+    capture_enable = capture_enable_;
+  }
+  transmit(vx, wz, capture_enable);
+}
+
+void RMSerialDriver::transmit(float vx, float wz, bool capture_enable)
+{
   try {
-    SendPacket packet;
+    if (!serial_driver_->port()->is_open()) {
+      return;
+    }
 
-    packet.test = msg->test;
-    
-    std::vector<uint8_t> data = toVector(packet);
-    serial_driver_->port()->send(data);
+    SendFrame frame{};
+    frame.header = FRAME_HEADER;
+    frame.vx = vx;
+    frame.wz = wz;
+    frame.capture_enable = boolToU8(capture_enable);
+    frame.tail = FRAME_TAIL;
 
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    const std::vector<uint8_t> data = toVector(frame);
+    const size_t written = serial_driver_->port()->send(data);
+    if (written != data.size()) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 200,
+        "short serial write: %zu / %zu", written, data.size());
+      return;
+    }
 
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "TX vx=%.3f wz=%.3f capture_enable=%u raw=[%s]",
+      vx, wz, static_cast<unsigned>(boolToU8(capture_enable)), toHex(data).c_str());
   } catch (const std::exception & ex) {
     RCLCPP_ERROR(get_logger(), "Error while sending data: %s", ex.what());
     reopenPort();
   }
 }
-
-
 
 void RMSerialDriver::getParams()
 {
@@ -250,7 +302,7 @@ void RMSerialDriver::getParams()
       throw std::invalid_argument{"The parity parameter must be one of: none, odd, or even."};
     }
   } catch (rclcpp::ParameterTypeException & ex) {
-    RCLCPP_ERROR(get_logger(), "The parity provided was invalid");
+    RCLCPP_ERROR(get_logger(), "The parity parameter provided was invalid");
     throw ex;
   }
 
@@ -270,6 +322,12 @@ void RMSerialDriver::getParams()
     RCLCPP_ERROR(get_logger(), "The stop_bits provided was invalid");
     throw ex;
   }
+
+  cmd_vel_topic_ = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
+  chassis_cmd_topic_ = declare_parameter<std::string>("chassis_cmd_topic", "/chassis_cmd");
+  capture_enable_topic_ = declare_parameter<std::string>("capture_enable_topic", "/capture_enable");
+  cmd_send_hz_ = declare_parameter<double>("cmd_send_hz", 20.0);
+  cmd_timeout_sec_ = declare_parameter<double>("cmd_timeout_sec", 0.3);
 
   device_config_ =
     std::make_unique<drivers::serial_driver::SerialPortConfig>(baud_rate, fc, pt, sb);
@@ -292,7 +350,6 @@ void RMSerialDriver::reopenPort()
     }
   }
 }
-
 
 }  // namespace rm_serial_driver
 

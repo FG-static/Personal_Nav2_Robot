@@ -13,6 +13,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "rm_interfaces/msg/gimbal.hpp"
 
 #include <Eigen/Dense>
 
@@ -82,6 +83,9 @@ private:
     void autoGoalResultCallback(
         const GoalHandleNavigateToPose::WrappedResult & result,
         uint8_t seq);
+    void onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg);
+    void setCaptureEnable(bool enable);
+    void resetInspectionHandshake();
     bool transformGoalToMap(
         const geometry_msgs::msg::PoseStamped & input,
         geometry_msgs::msg::PoseStamped & output) const;
@@ -105,6 +109,8 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr valid_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr exit_detected_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr capture_enable_pub_;
+    rclcpp::Subscription<rm_interfaces::msg::Gimbal>::SharedPtr gimbal_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr left_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr right_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_points_pub_;
@@ -160,6 +166,8 @@ private:
     bool has_sent_auto_goal_ = false;
     bool waiting_for_auto_goal_result_ = false;
     bool auto_goal_dwelling_ = false;
+    bool waiting_for_mcu_capture_ = false;
+    bool mcu_capture_done_ = false;
     geometry_msgs::msg::PoseStamped latest_auto_goal_;
     geometry_msgs::msg::PoseStamped last_sent_auto_goal_;
     rclcpp::Time last_auto_goal_send_time_{0, 0, RCL_ROS_TIME};

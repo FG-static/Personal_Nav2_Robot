@@ -33,7 +33,7 @@ tunnel_guidance:
         enable_auto_goal: true
         auto_goal_frame_id: map
         min_goal_send_interval: 1.0
-        # 到达后停留，留给涵洞拍照；0 表示到位后立刻发下一个前瞻点
+        # 到达后停留，capture_enable=true 通知电控开灯拍照；1s 后拉低，再等电控 capture_done
         auto_goal_dwell_time: 1.0
         auto_goal_candidate_count: 4
         auto_goal_candidate_spacing: 1.0
