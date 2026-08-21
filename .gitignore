@@ -4,7 +4,6 @@ install/
 log/
 *.gv
 *.pdf
-serial_driver/
 第二题程序设计文档.md
 
 # --- Python & System ---
