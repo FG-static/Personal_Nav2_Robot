@@ -174,7 +174,7 @@ def generate_launch_description():
     ])
     '''
     dynamic_map_path = PythonExpression([
-        "'' if '", slam_mode, "' == 'True' else '",
+        "'' if '", slam_mode, "' in ('true', 'True') else '",
         map_yaml_file, "'"
     ])
     nav2_bringup_launch_slam = IncludeLaunchDescription(
@@ -187,6 +187,9 @@ def generate_launch_description():
             'slam': slam_for_bringup,
             'map': dynamic_map_path,
             'params_file': slam_params_rewritten,
+            # Isolated processes: a planner plugin crash must not take down
+            # the whole nav2_container (exit 127 with no flushed logs).
+            'use_composition': 'False',
         }.items()
     )
     nav2_bringup_launch_nav = IncludeLaunchDescription(
@@ -199,6 +202,7 @@ def generate_launch_description():
             'slam': slam_for_bringup,
             'map': dynamic_map_path,
             'params_file': nav_params_with_pose,
+            'use_composition': 'False',
         }.items()
     )
 
@@ -227,6 +231,16 @@ def generate_launch_description():
         }],
         output='screen',
         condition=IfCondition(use_ground_truth_odom),
+    )
+
+    # slam_toolbox only publishes /map while at least one subscriber exists.
+    map_keepalive = Node(
+        package='my_nav2_robot',
+        executable='map_keepalive.py',
+        name='map_keepalive',
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen',
+        condition=IfCondition(slam_mode),
     )
 
     return LaunchDescription([
@@ -284,6 +298,7 @@ def generate_launch_description():
         gazebo_sim_nav,
         static_tf_node,
         ground_truth_odom_relay,
+        map_keepalive,
         nav2_bringup_launch_slam,
         nav2_bringup_launch_nav,
         rviz_node

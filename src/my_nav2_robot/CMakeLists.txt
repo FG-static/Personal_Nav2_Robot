@@ -157,6 +157,7 @@ install(FILES plugins.xml
 install(PROGRAMS
   scripts/generate_truth_map.py
   scripts/ground_truth_odom_relay.py
+  scripts/map_keepalive.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

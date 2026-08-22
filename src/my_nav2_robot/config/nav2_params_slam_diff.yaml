@@ -81,16 +81,19 @@ slam_toolbox:
     scan_queue_size: 20
     # 不为 0 时才会发布 map -> odom
     transform_publish_period: 0.02
-    map_update_interval: 5.0
+    map_update_interval: 1.0
     resolution: 0.05
-    restamp_tf: false
-    # Mid360 laserscan range_min is 0.2 m; slam_toolbox warns and
-    # rasterizes poorly if this is below the sensor's advertised min.
-    min_laser_range: 0.2
+    # Stamp map->odom with now()+timeout so delayed BIEVR/GT odom still
+    # extrapolates instead of looking up the (possibly late) scan stamp.
+    restamp_tf: true
+    # Must be strictly below the LaserScan range_min (0.2 m) or slam_toolbox
+    # warns and the first scan may not register the sensor.
+    min_laser_range: 0.15
     # 与 Mid360 / pointcloud_to_laserscan 的 12m 量程保持一致
     max_laser_range: 12.0
     minimum_time_interval: 0.5
-    transform_timeout: 0.2
+    # GT is usually fine at 0.2 s; BIEVR-LIO odom TF is delayed to lidar time.
+    transform_timeout: 0.5
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     enable_interactive_mode: true
@@ -239,7 +242,7 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 6.28318530718
+      yaw_goal_tolerance: 0.06
       stateful: True
     # BT 默认 controller_id 仍是 FollowPath，这里接到差速 DWA。
     FollowPath:

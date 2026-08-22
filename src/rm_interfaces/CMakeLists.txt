@@ -17,6 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #######################
 
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
@@ -28,7 +29,8 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Target.msg"
   "msg/Gimbal.msg"
-  DEPENDENCIES geometry_msgs std_msgs
+  "msg/ReplanEvent.msg"
+  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs
 )
 
 #############
