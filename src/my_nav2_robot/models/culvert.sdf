@@ -3,8 +3,9 @@
     <!--
       涵洞场景：
       - 长度方向改为 X 轴，总长 24m（x: -12.0 ~ 12.0）
-      - 净宽 4m（y: -2.0 ~ 2.0），净高 2m（z: 0.0 ~ 2.0）
-      - 两侧墙各厚 0.2m，不封底/不封顶/两端开口
+      - 净宽 4m（y: -2.0 ~ 2.0），两端开口且不封底
+      - 顶板内表面沿 +X 从 2.0m 平缓下降到 1.6m，下降坡度约 0.95deg
+      - 两侧墙和顶板厚度均为 0.2m；最低处仍远高于机器人最高点 0.215m
       - 墙体内嵌若干盒状/圆柱特征物，只向通道内突出约 0.08~0.10m
     -->
     <model name="culvert">
@@ -43,6 +44,25 @@
                 <material>
                     <ambient>0.35 0.35 0.35 1</ambient>
                     <diffuse>0.65 0.65 0.65 1</diffuse>
+                </material>
+            </visual>
+
+            <!-- 连续倾斜顶板：内表面从入口 x=-12m 的 z=2.0m
+                 下降到出口 x=12m 的 z=1.6m。 -->
+            <collision name="sloped_ceiling_collision">
+                <pose>0.001667 0 1.899986 0 0.016665 0</pose>
+                <geometry>
+                    <box><size>24.003333 4.4 0.2</size></box>
+                </geometry>
+            </collision>
+            <visual name="sloped_ceiling_visual">
+                <pose>0.001667 0 1.899986 0 0.016665 0</pose>
+                <geometry>
+                    <box><size>24.003333 4.4 0.2</size></box>
+                </geometry>
+                <material>
+                    <ambient>0.30 0.30 0.32 1</ambient>
+                    <diffuse>0.55 0.55 0.60 1</diffuse>
                 </material>
             </visual>
 
