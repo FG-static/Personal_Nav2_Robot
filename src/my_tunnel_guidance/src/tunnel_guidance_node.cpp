@@ -39,6 +39,34 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     min_side_lateral_distance_ = declare_parameter("min_side_lateral_distance", 1.0);
     voxel_leaf_size_ = declare_parameter("voxel_leaf_size", 0.05);
     lookahead_distance_ = declare_parameter("lookahead_distance", 5.0);
+
+    search_params_.resolution = declare_parameter("search_resolution", 0.10);
+    search_params_.min_x = declare_parameter(
+        "search_min_x", -max_backward_distance_);
+    search_params_.max_x = declare_parameter(
+        "search_max_x", max_forward_distance_);
+    search_params_.half_width = declare_parameter(
+        "search_half_width", max_lateral_distance_);
+    search_params_.obstacle_min_height = declare_parameter(
+        "search_obstacle_min_height", 0.15);
+    search_params_.obstacle_max_height = declare_parameter(
+        "search_obstacle_max_height", 1.30);
+    search_params_.robot_clearance = declare_parameter(
+        "search_robot_clearance", 0.30);
+    search_params_.clearance_weight = declare_parameter(
+        "search_clearance_weight", 2.0);
+    search_params_.clearance_decay = declare_parameter(
+        "search_clearance_decay", 0.50);
+    search_params_.unknown_cost_factor = declare_parameter(
+        "search_unknown_cost_factor", 1.3);
+    search_params_.free_close_kernel = declare_parameter(
+        "search_free_close_kernel", 3);
+    search_params_.minimum_frontier_distance = declare_parameter(
+        "search_minimum_frontier_distance", 3.0);
+    search_params_.goal_distance = declare_parameter(
+        "search_goal_distance", lookahead_distance_);
+    search_params_.debug_expansion_interval = 0U;
+
     filter_alpha_ = declare_parameter("filter_new_measurement_weight", 0.2);
     valid_frame_count_ = declare_parameter("valid_frame_count", 3);
     result_hold_time_ = declare_parameter("result_hold_time", 0.5);
@@ -67,18 +95,6 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
     auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 8.0);
-    auto_goal_candidate_count_ =
-        declare_parameter(
-            "auto_goal_candidate_count",
-            4);
-    auto_goal_candidate_spacing_ =
-        declare_parameter(
-            "auto_goal_candidate_spacing",
-            1.0);
-    if (auto_goal_candidate_count_ < 1) {
-
-        auto_goal_candidate_count_ = 1;
-    }
     if (auto_goal_dwell_time_ < 0.0) {
 
         auto_goal_dwell_time_ = 0.0;
@@ -97,6 +113,8 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     geometry_params_.centerline_point_spacing =
         declare_parameter("centerline_point_spacing", 0.2);
     estimator_ = TunnelGeometryEstimator(geometry_params_);
+    searcher_ = std::make_unique<TunnelGuidanceSearch>(search_params_);
+    search_requested_ = enable_auto_goal_;
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -435,6 +453,57 @@ bool TunnelGuidanceNode::updateWallModel(
     return true;
 }
 
+bool TunnelGuidanceNode::planNextInspectionGoal(
+    const std::vector<Eigen::Vector3d> & base_points,
+    const rclcpp::Time & stamp,
+    const Eigen::Isometry3d & base_to_output
+) {
+
+    const TunnelGuidanceSearchResult search_result =
+        searcher_->search(base_points);
+    if (!search_result.valid) {
+
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "No valid inspection goal in the latest point cloud");
+        return false;
+    }
+
+    CenterlineEstimate centerline;
+    centerline.points.reserve(search_result.path.size());
+    centerline.tangents.reserve(search_result.path.size());
+    for (std::size_t i = 0; i < search_result.path.size(); ++ i) {
+
+        const bool is_goal =
+            (search_result.path[i] - search_result.goal).norm() < 1e-6;
+        const Eigen::Vector3d tangent =
+            !is_goal && i + 1 < search_result.path.size() ?
+            search_result.path[i + 1] - search_result.path[i] :
+            search_result.goal_tangent;
+        centerline.points.push_back(base_to_output * search_result.path[i]);
+        centerline.tangents.push_back(
+            (base_to_output.linear() * tangent).normalized());
+        if (is_goal) break;
+    }
+
+    centerline.local_frame.center = base_to_output.translation();
+    centerline.local_frame.tangent = centerline.tangents.front();
+    centerline.local_frame.up =
+        (base_to_output.linear() * Eigen::Vector3d::UnitZ()).normalized();
+    centerline.local_frame.lateral =
+        centerline.local_frame.up.cross(centerline.local_frame.tangent).normalized();
+    centerline.local_frame.valid = true;
+    centerline.valid = true;
+    publishResults(stamp, centerline, true, true);
+
+    const Eigen::Vector3d goal_output = centerline.points.back();
+    RCLCPP_INFO(
+        get_logger(),
+        "Planned next inspection goal once: x=%.2f y=%.2f clearance=%.2f",
+        goal_output.x(), goal_output.y(), search_result.goal_clearance);
+    return true;
+}
+
 void TunnelGuidanceNode::pointCloudCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg
 ) {
@@ -449,6 +518,12 @@ void TunnelGuidanceNode::pointCloudCallback(
     if (!getBaseToOutputTransform(stamp, base_to_output)) {
 
         return;
+    }
+
+    if (enable_auto_goal_ && search_requested_ &&
+        planNextInspectionGoal(base_points, stamp, base_to_output)) {
+
+        search_requested_ = false;
     }
 
     std::vector<Eigen::Vector3d> output_points;
@@ -507,7 +582,7 @@ void TunnelGuidanceNode::pointCloudCallback(
         if (!base_frame.valid) {
 
             calibration_valid_frames_ = 0;
-            if (has_last_result_ &&
+            if (!enable_auto_goal_ && has_last_result_ &&
                 (now - last_valid_time_).seconds() <= result_hold_time_
             ) {
 
@@ -529,7 +604,7 @@ void TunnelGuidanceNode::pointCloudCallback(
 
             const CenterlineEstimate calibration_centerline =
                 estimator_.buildStraightCenterline(output_frame);
-            if (calibration_centerline.valid) {
+            if (!enable_auto_goal_ && calibration_centerline.valid) {
 
                 publishResults(stamp, calibration_centerline, false);
             }
@@ -626,7 +701,10 @@ void TunnelGuidanceNode::pointCloudCallback(
     const bool publish_valid =
         !exit_detected_ &&
         wall_model_.initialized && consecutive_valid_ >= valid_frame_count_;
-    publishResults(stamp, centerline, publish_valid);
+    if (!enable_auto_goal_) {
+
+        publishResults(stamp, centerline, publish_valid);
+    }
 }
 
 double TunnelGuidanceNode::yawFromTangent(
@@ -639,7 +717,8 @@ double TunnelGuidanceNode::yawFromTangent(
 void TunnelGuidanceNode::publishResults(
     const rclcpp::Time & stamp,
     const CenterlineEstimate & centerline,
-    bool valid
+    bool valid,
+    bool use_path_endpoint_as_goal
 ) {
 
     nav_msgs::msg::Path path_msg;
@@ -663,17 +742,19 @@ void TunnelGuidanceNode::publishResults(
 
     geometry_msgs::msg::PoseStamped goal;
     goal.header = path_msg.header;
-    const double auto_goal_distance =
-        lookahead_distance_ +
-        static_cast<double>(auto_goal_candidate_index_) *
-        auto_goal_candidate_spacing_;
-    const std::size_t goal_index = std::min(
-        centerline.points.size() - 1,
-        static_cast<std::size_t>(
-            std::llround(
-                auto_goal_distance /
-                geometry_params_.centerline_point_spacing)));
-    goal.pose = path_msg.poses[goal_index].pose;
+    if (use_path_endpoint_as_goal) {
+
+        goal.pose = path_msg.poses.back().pose;
+    } else {
+
+        const std::size_t goal_index = std::min(
+            centerline.points.size() - 1,
+            static_cast<std::size_t>(
+                std::llround(
+                    lookahead_distance_ /
+                    geometry_params_.centerline_point_spacing)));
+        goal.pose = path_msg.poses[goal_index].pose;
+    }
     local_goal_pub_->publish(goal);
 
     if (enable_auto_goal_) {
@@ -768,11 +849,22 @@ void TunnelGuidanceNode::publishResults(
 
 void TunnelGuidanceNode::maybeSendAutoGoal() {
 
-    if (!enable_auto_goal_ || !auto_goal_client_ ||
-        !wall_model_.initialized || !has_latest_auto_goal_ ||
-        exit_detected_)
-    {
+    if (!enable_auto_goal_ || !auto_goal_client_) {
 
+        return;
+    }
+
+    // 退出检测时取消所有目标，重置状态
+    if (exit_detected_) {
+
+        if (waiting_for_auto_goal_result_) {
+
+            auto_goal_client_->async_cancel_all_goals();
+            waiting_for_auto_goal_result_ = false;
+            has_sent_auto_goal_ = false;
+        }
+        auto_goal_dwelling_ = false;
+        has_latest_auto_goal_ = false;
         return;
     }
 
@@ -789,10 +881,16 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
             return;
         }
-        RCLCPP_INFO(get_logger(), "Auto goal dwell finished, sending next lookahead");
+        RCLCPP_INFO(get_logger(), "Auto goal dwell finished, planning next goal");
         auto_goal_dwelling_ = false;
         has_sent_auto_goal_ = false;
-        auto_goal_candidate_index_ = 0;
+        has_latest_auto_goal_ = false;
+        search_requested_ = true;
+    }
+
+    if (search_requested_ || !has_latest_auto_goal_) {
+
+        return;
     }
 
     if (has_sent_auto_goal_) {
@@ -851,8 +949,7 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
     RCLCPP_INFO(
         get_logger(),
-        "Sending auto goal k=%d: x=%.2f y=%.2f yaw=%.2f",
-        auto_goal_candidate_index_,
+        "Sending auto goal: x=%.2f y=%.2f yaw=%.2f",
         action_goal.pose.pose.position.x,
         action_goal.pose.pose.position.y,
         std::atan2(
@@ -875,7 +972,8 @@ void TunnelGuidanceNode::autoGoalResponseCallback(
         RCLCPP_WARN(get_logger(), "Auto goal was rejected by NavigateToPose");
         waiting_for_auto_goal_result_ = false;
         has_sent_auto_goal_ = false;
-        advanceAutoGoalCandidate();
+        has_latest_auto_goal_ = false;
+        search_requested_ = true;
     }
 }
 
@@ -898,35 +996,30 @@ void TunnelGuidanceNode::autoGoalResultCallback(
         case rclcpp_action::ResultCode::SUCCEEDED:
             auto_goal_dwelling_ = true;
             dwell_start_time_ = get_clock()->now();
-            auto_goal_candidate_index_ = 0;
             RCLCPP_INFO(
                 get_logger(),
                 "Auto goal succeeded, dwelling for %.1f s",
                 auto_goal_dwell_time_);
             break;
         case rclcpp_action::ResultCode::ABORTED:
-            RCLCPP_WARN(get_logger(), "Auto goal aborted, trying next candidate");
+            RCLCPP_WARN(get_logger(), "Auto goal aborted, planning a new goal");
             has_sent_auto_goal_ = false;
-            advanceAutoGoalCandidate();
+            has_latest_auto_goal_ = false;
+            search_requested_ = true;
             break;
         case rclcpp_action::ResultCode::CANCELED:
             RCLCPP_INFO(get_logger(), "Auto goal canceled");
             has_sent_auto_goal_ = false;
+            has_latest_auto_goal_ = false;
             auto_goal_dwelling_ = false;
+            search_requested_ = false;
             break;
         default:
             has_sent_auto_goal_ = false;
+            has_latest_auto_goal_ = false;
             auto_goal_dwelling_ = false;
+            search_requested_ = true;
             break;
-    }
-}
-
-void TunnelGuidanceNode::advanceAutoGoalCandidate() {
-
-    ++auto_goal_candidate_index_;
-    if (auto_goal_candidate_index_ >= auto_goal_candidate_count_) {
-
-        auto_goal_candidate_index_ = 0;
     }
 }
 

@@ -405,14 +405,28 @@ dijkstra_search.avi        # 搜索过程动画，编码器不可用时输出fra
 
 ## 10. 节点集成方式
 
-1. `pointCloudCallback()` 保留现有点云时间戳和 TF 处理。
-2. 点云转换到 `base_link` 后调用 `TunnelGuidanceSearch::search()`。
-3. 搜索成功时，将局部引导路径转换到 `output_frame`。
-4. 使用现有 `centerline` 话题发布引导路径，便于 RViz/Foxglove 观察。
-5. 使用现有 `local_goal` 发布选定的巡检点。
-6. 复用当前 `NavigateToPose` 目标锁定逻辑：活动目标未结束时不重复发送新目标。
-7. 搜索短暂失败时保留当前活动目标；连续失败或目标区域变成占用时再取消目标。
-8. 不再要求 `wall_model_.initialized` 才能发送搜索得到的巡检点。
+1. `pointCloudCallback()` 保留原有点云转换、标定、墙模型更新、出口检测和分类点云发布流程。
+2. 新增 `search_requested_` 作为一次性搜索请求；节点启动时置位，首次有效点云到来时规划巡检点。
+3. 搜索成功时，将局部引导路径转换到 `output_frame`，并发布 `centerline` 和 `local_goal`。
+4. 向 Nav2 发送该巡检点后进入 `GoalActive`，活动目标期间不运行 Dijkstra。
+5. 到达巡检点后进入 `Dwelling`，等待 `auto_goal_dwell_time` 表示本次巡检完成。
+6. 巡检完成后进入 `PlanningRequested`，在下一帧有效点云上重新运行一次完整搜索。
+7. 新搜索结果直接使用算法给出的 `goal`，不沿旧路径按候选索引或剩余距离继续推进目标。
+8. 目标被拒绝或导航失败时请求一次全新搜索；目标被取消时停止自动巡检。
+9. 搜索失败时保持请求标志，在下一帧点云上重试，不在定时器中重复转换或搜索同一帧。
+
+节点状态保持为：
+
+```text
+WaitingForCloud
+    -> PlanningRequested
+    -> GoalReady
+    -> GoalActive
+    -> Dwelling
+    -> PlanningRequested
+```
+
+该状态机表达“规划一次、行驶、巡检、再规划一次”，不能退化为点云回调中的连续滚动规划。
 
 ## 11. 实施阶段
 
@@ -434,9 +448,11 @@ dijkstra_search.avi        # 搜索过程动画，编码器不可用时输出fra
 
 ### 阶段 3：接入现有节点
 
-- 在点云回调中运行搜索器。
+- 复用现有点云回调和 TF 结果，仅在 `search_requested_` 置位时调用搜索器。
 - 替换固定直线中心线和固定索引选点。
-- 复用现有话题、Marker 和 Nav2 Action 状态机。
+- 删除候选索引、旧路径剩余距离推进和逐帧搜索失败计数。
+- 到点停留结束后使用最新点云重新规划下一巡检点。
+- 复用现有话题、Marker 和 Nav2 Action 接口。
 - YAML 增加搜索参数。
 
 ### 阶段 4：仿真和 rosbag 验证

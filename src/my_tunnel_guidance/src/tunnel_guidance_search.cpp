@@ -75,12 +75,15 @@ bool TunnelGuidanceSearch::parametersValid() const
            std::isfinite(params_.minimum_frontier_distance) &&
            params_.minimum_frontier_distance >= 0.0 &&
            std::isfinite(params_.goal_distance) &&
-           params_.goal_distance > 0.0;
+           params_.goal_distance > 0.0 &&
+           std::isfinite(params_.unknown_cost_factor) &&
+           params_.unknown_cost_factor >= 1.0 &&
+           params_.free_close_kernel >= 0;
 }
 
 /**
  * @brief 由 base_link 系点云构建 2D 占用栅格
- * 
+ *
  * 每个有效点先按布雷森汉姆直线算法从机器人位置（原点）向该点
  * 扫描，沿途格子标记为 Free；落点在障碍物高度带内的格子标记为
  * Occupied，其余高度的点只提供自由空间证据。
@@ -193,12 +196,63 @@ TunnelGrid TunnelGuidanceSearch::buildGridFromPoints(
         }
     }
 
+    // 弥合相邻射线之间的假性 Unknown 缝隙，避免规划绕开逐帧漂移的观测空洞
+    applyFreeClosing(grid, params_.free_close_kernel);
     return grid;
 }
 
 /**
+ * @brief 对 Free 掩码执行形态学闭运算，弥合射线间的假性 Unknown 缝隙
+ *
+ * 仅将"闭运算后被 Free 覆盖的 Unknown 格"提升为 Free；
+ * Occupied 与原有 Free 保持不变，因此不会穿越墙体。
+ * 核边长 <3 时直接返回（功能关闭）。
+ * @param grid 占用栅格，就地修改
+ * @param kernel 闭运算核边长（格）
+ */
+void TunnelGuidanceSearch::applyFreeClosing(TunnelGrid & grid, int kernel)
+{
+    if (kernel < 3 || !isValidGrid(grid)) {
+        return;
+    }
+
+    cv::Mat free_mask(
+        grid.height, grid.width, CV_8UC1, cv::Scalar(0U));
+    for (int my = 0; my < grid.height; ++ my) {
+
+        for (int mx = 0; mx < grid.width; ++ mx) {
+
+            if (grid.states[toIndex(grid, mx, my)] == GridState::Free) {
+
+                free_mask.at<unsigned char>(my, mx) = 255U;
+            }
+        }
+    }
+
+    const int odd_kernel = kernel | 1;
+    const cv::Mat element = cv::getStructuringElement(
+        cv::MORPH_RECT, cv::Size(odd_kernel, odd_kernel)); // 形态学闭运算核
+    cv::Mat closed_mask;
+    // 形态学闭运算 ~ erode + dilate（腐蚀 + 膨胀）
+    cv::morphologyEx(free_mask, closed_mask, cv::MORPH_CLOSE, element);
+
+    for (int my = 0; my < grid.height; ++ my) {
+
+        for (int mx = 0; mx < grid.width; ++ mx) {
+
+            const std::size_t index = toIndex(grid, mx, my);
+            if (grid.states[index] == GridState::Unknown &&
+                closed_mask.at<unsigned char>(my, mx) != 0U) {
+
+                grid.states[index] = GridState::Free;
+            }
+        }
+    }
+}
+
+/**
  * @brief 计算带符号障碍物距离场（ESDF）
- * 
+ *
  * 将占用栅格转为二值图像后，使用 OpenCV 的精确 L2 距离变换，
  * 得到每个格子到最近障碍物的距离（米），供避障代价与可通行判断使用。
  * @param grid 占用栅格
@@ -362,13 +416,14 @@ Eigen::Vector2d TunnelGuidanceSearch::cellToWorld(
 
 /**
  * @brief 判断某个格子是否允许搜索通过
- * 
- * 要求：在网格内、非占用、是 Free 或起点、且到最近障碍物的
- * 距离不小于机器人安全间隙。未知格子不允许通过。
+ *
+ * 要求：在网格内、非占用，且到最近障碍物的距离不小于机器人安全间隙。
+ * Unknown（未观测）格与 Free 同等可通行，仅通过 unknown_cost_factor
+ * 边代价乘子表达对确认空地的弱偏好。
  * @param grid 占用栅格
  * @param data 搜索数据，提供 ESDF 距离
  * @param index 待判断格子的下标
- * @param start_index 起点下标，起点不受 Free/未知限制
+ * @param start_index 起点下标（保持兼容，不再特殊处理）
  * @return 可通过时返回 true
  */
 bool TunnelGuidanceSearch::isSearchCellTraversable(
@@ -377,14 +432,12 @@ bool TunnelGuidanceSearch::isSearchCellTraversable(
     std::size_t index,
     std::size_t start_index) const
 {
+    (void)start_index;
     if (index >= grid.states.size() ||
         index >= data.esdf_distances.size()) {
         return false;
     }
     if (grid.states[index] == GridState::Occupied) {
-        return false;
-    }
-    if (grid.states[index] != GridState::Free && index != start_index) {
         return false;
     }
     return data.esdf_distances[index] + kEpsilon >= params_.robot_clearance;
@@ -457,7 +510,7 @@ std::vector<int> TunnelGuidanceSearch::reconstructCellPath(
 
 /**
  * @brief 从搜索数据中构建结果
- * 
+ *
  * 将栅格路径转换为世界坐标路径，按 goal_distance 截取局部目标点，
  * 并估计目标点的前进方向（切线）与安全间隙。
  * @param grid 搜索网格
@@ -585,7 +638,7 @@ TunnelGuidanceSearchResult TunnelGuidanceSearch::search(
 
 /**
  * @brief 在占用栅格上执行搜索
- * 
+ *
  * 流程：计算 ESDF 距离场 -> 以机器人为起点执行带避障代价的
  * Dijkstra 扩展 -> 在所有可到达格中挑选最优前沿（或最远可到达格）
  * 作为终点 -> 回溯并构建结果。
@@ -688,14 +741,19 @@ TunnelGuidanceSearchResult TunnelGuidanceSearch::searchGrid(
             }
 
             // 边代价 = 移动距离 x (1 + 避障惩罚)，惩罚随到障碍物距离
-            // 指数衰减，引导路径尽量远离障碍物
+            // 指数衰减，引导路径尽量远离障碍物；
+            // 穿越未知区额外乘 unknown_cost_factor，倾向留在确认空地
             const double move_distance = diagonal ?
                 std::sqrt(2.0) * grid.resolution : grid.resolution;
             const double clearance = data.esdf_distances[neighbor_index];
             const double clearance_penalty =
                 params_.clearance_weight *
                 std::exp(-clearance / params_.clearance_decay);
-            const double edge_cost = move_distance * (1.0 + clearance_penalty);
+            const double region_factor =
+                grid.states[neighbor_index] == GridState::Unknown ?
+                params_.unknown_cost_factor : 1.0;
+            const double edge_cost =
+                move_distance * (1.0 + clearance_penalty) * region_factor;
             const double new_cost =
                 data.costs[static_cast<std::size_t>(current_index)] + edge_cost;
             if (new_cost + kEpsilon >= data.costs[neighbor_index]) {
@@ -783,6 +841,12 @@ TunnelGuidanceSearchResult TunnelGuidanceSearch::searchGrid(
             if (point.x() < 0.0 ||
                 data.path_lengths[unsigned_index] + kEpsilon <
                 params_.minimum_frontier_distance) {
+                continue;
+            }
+
+            // 巡检终点必须落在已确认空地上：路径可以穿过未知区，
+            // 但目标点不能落在从未观测到的区域
+            if (grid.states[unsigned_index] != GridState::Free) {
                 continue;
             }
 

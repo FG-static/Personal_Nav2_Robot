@@ -119,6 +119,10 @@ ament_target_dependencies(${PROJECT_NAME}_search
     Eigen3
 )
 
+target_link_libraries(tunnel_guidance_node
+    ${PROJECT_NAME}_search
+)
+
 install(TARGETS
     ${PROJECT_NAME}_search
     ARCHIVE DESTINATION lib

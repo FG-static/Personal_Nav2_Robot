@@ -25,6 +25,10 @@ struct TunnelGuidanceSearchParams {
     double clearance_decay = 0.50;
     double minimum_frontier_distance = 3.0;
     double goal_distance = 5.0;
+    // 未知区边代价乘子（>=1）：路径允许穿过未观测区域，但更倾向留在确认空地
+    double unknown_cost_factor = 1.3;
+    // Free 掩码形态学闭运算核边长（单位：格，建议奇数；<3 表示关闭）
+    int free_close_kernel = 3;
     std::size_t debug_expansion_interval = 50U;
 };
 
@@ -60,6 +64,15 @@ public:
 
     TunnelGuidanceSearchResult search(
         const std::vector<Eigen::Vector3d> & base_points) const;
+
+    /**
+     * @brief 对占用栅格的 Free 掩码做形态学闭运算（先膨胀后腐蚀），
+     *        将相邻射线之间小于核尺寸的假性 Unknown 缝隙提升为 Free。
+     *        Occupied 永远不会被修改，真实的大块未观测区也基本保留。
+     * @param grid 待处理的占用栅格（就地修改）
+     * @param kernel 闭运算核边长（单位：格，建议奇数；<3 表示关闭）
+     */
+    static void applyFreeClosing(TunnelGrid & grid, int kernel);
 
     TunnelGuidanceSearchResult searchGrid(
         const TunnelGrid & grid,

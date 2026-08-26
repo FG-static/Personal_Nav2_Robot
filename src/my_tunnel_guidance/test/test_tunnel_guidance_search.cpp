@@ -239,3 +239,106 @@ TEST(TunnelGuidanceSearch, EmitsDeterministicDebugSnapshots)
     EXPECT_EQ(last_closed_count, 80U * 120U);
 }
 
+TEST(TunnelGuidanceSearch, ApplyFreeClosingBridgesGapsKeepsOccupied)
+{
+    // 三行夹一条单个 Unknown 缝隙，闭运算应把它提升为 Free；
+    // 周边已有状态（Free/Occupied）保持不变，kernel < 3 时为空操作。
+    TunnelGrid grid;
+    grid.width = 5;
+    grid.height = 3;
+    grid.resolution = 0.1;
+    grid.origin = Eigen::Vector2d(-0.25, -0.15);
+    grid.states.assign(
+        static_cast<std::size_t>(grid.width) * grid.height, GridState::Free);
+
+    const std::size_t gap_index =
+        static_cast<std::size_t>(1 * grid.width + 2);
+    const std::size_t occupied_index =
+        static_cast<std::size_t>(2 * grid.width + 3);
+    grid.states[gap_index] = GridState::Unknown;
+    grid.states[occupied_index] = GridState::Occupied;
+
+    TunnelGuidanceSearch::applyFreeClosing(grid, 1);
+    EXPECT_EQ(grid.states[gap_index], GridState::Unknown);
+
+    TunnelGuidanceSearch::applyFreeClosing(grid, 3);
+    EXPECT_EQ(grid.states[gap_index], GridState::Free);
+    EXPECT_EQ(grid.states[occupied_index], GridState::Occupied);
+}
+
+TEST(TunnelGuidanceSearch, SearchCrossesUnknownEndpointStaysObserved)
+{
+    // 左右两块确认空地被整列 Unknown 隔开：路径必须穿越未知区，
+    // 但终点只能落在右侧确认空地上；占用车界外框封闭洪水。
+    TunnelGuidanceSearchParams params = testParams();
+    params.robot_clearance = 0.05;
+    params.minimum_frontier_distance = 0.15;
+    params.goal_distance = 0.25;
+    TunnelGuidanceSearch search(params);
+
+    TunnelGrid grid;
+    grid.width = 12;
+    grid.height = 7;
+    grid.resolution = 0.1;
+    grid.origin = Eigen::Vector2d(-0.55, -0.30);
+    grid.states.assign(
+        static_cast<std::size_t>(grid.width) * grid.height, GridState::Unknown);
+
+    auto setColumnRange = [&grid](
+        int mx, int my_begin, int my_end, GridState state) {
+        for (int my = my_begin; my <= my_end; ++my) {
+            grid.states[static_cast<std::size_t>(my * grid.width + mx)] =
+                state;
+        }
+    };
+    auto setState = [&grid](int mx, int my, GridState state) {
+        grid.states[static_cast<std::size_t>(my * grid.width + mx)] = state;
+    };
+
+    for (int mx = 0; mx < grid.width; ++mx) {
+        setState(mx, 0, GridState::Occupied);
+        setState(mx, grid.height - 1, GridState::Occupied);
+    }
+    for (int my = 0; my < grid.height; ++my) {
+        setState(0, my, GridState::Occupied);
+        setState(grid.width - 1, my, GridState::Occupied);
+    }
+
+    for (int mx = 1; mx <= 4; ++mx) {
+        setColumnRange(mx, 1, grid.height - 2, GridState::Free);
+    }
+    // 整列 Unknown 作为必经的未观测隔离带（起点格 (5,3) 由 SearchData 覆盖）
+    setColumnRange(5, 1, grid.height - 2, GridState::Unknown);
+    setColumnRange(6, 1, grid.height - 2, GridState::Unknown);
+    for (int mx = 7; mx <= 10; ++mx) {
+        setColumnRange(mx, 1, grid.height - 2, GridState::Free);
+    }
+    // 起点在世界原点附近且必须是可通行格
+    setState(5, 3, GridState::Free);
+
+    const auto result = search.searchGrid(grid);
+
+    ASSERT_TRUE(result.valid);
+    EXPECT_GE(result.goal_clearance, params.robot_clearance);
+    EXPECT_EQ(
+        grid.states[pointToIndex(grid, result.goal)], GridState::Free);
+    bool crossed_unknown = false;
+    for (const Eigen::Vector3d & point : result.path) {
+        if (grid.states[pointToIndex(grid, point)] == GridState::Unknown) {
+            crossed_unknown = true;
+        }
+    }
+    EXPECT_TRUE(crossed_unknown);
+}
+
+TEST(TunnelGuidanceSearch, RejectsInvalidUnknownCostFactor)
+{
+    TunnelGuidanceSearchParams params = testParams();
+    params.unknown_cost_factor = 0.9;
+    TunnelGuidanceSearch search(params);
+
+    const auto result = search.searchGrid(makeCurvedGrid());
+    EXPECT_FALSE(result.valid);
+}
+
+
