@@ -4,6 +4,7 @@
 #include <Eigen/Dense>
 
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -50,6 +51,22 @@ struct TunnelWallModel {
     double left_l = 2.0;
     double right_l = -2.0;
     double width = 4.0;
+};
+
+enum class GridState : std::uint8_t {
+    Unknown,
+    Free,
+    Occupied
+};
+
+// A local 2D grid expressed in the frame used to create it.
+struct TunnelGrid {
+
+    int width = 0;
+    int height = 0;
+    double resolution = 0.10;
+    Eigen::Vector2d origin = Eigen::Vector2d::Zero();
+    std::vector<GridState> states;
 };
 
 }  // namespace my_tunnel_guidance

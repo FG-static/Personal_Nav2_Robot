@@ -25,11 +25,13 @@ find_package(tf2_eigen REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common filters)
 find_package(Eigen3 REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
 include_directories(
     include
     ${PCL_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
 )
 add_definitions(${PCL_DEFINITIONS})
 
@@ -85,10 +87,41 @@ ament_target_dependencies(tunnel_guidance_node
     Eigen3
 )
 
+add_library(${PROJECT_NAME}_search
+    src/tunnel_guidance_search.cpp
+)
+target_include_directories(${PROJECT_NAME}_search PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(${PROJECT_NAME}_search
+    ${OpenCV_LIBS}
+)
+ament_target_dependencies(${PROJECT_NAME}_search
+    Eigen3
+)
+
+target_link_libraries(tunnel_guidance_node
+    ${PROJECT_NAME}_search
+)
+
+add_executable(tunnel_guidance_demo
+    tools/tunnel_guidance_demo.cpp
+)
+target_include_directories(tunnel_guidance_demo PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(tunnel_guidance_demo
+    ${PROJECT_NAME}_search
+    ${OpenCV_LIBS}
+)
+
 install(TARGETS
     tunnel_guidance_node
+    tunnel_guidance_demo
     ${PROJECT_NAME}_geometry
     ${PROJECT_NAME}_timing
+    ${PROJECT_NAME}_search
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -102,8 +135,8 @@ install(DIRECTORY config launch
 )
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME}_geometry ${PROJECT_NAME}_timing)
-ament_export_dependencies(rclcpp rclcpp_action nav2_msgs sensor_msgs geometry_msgs nav_msgs std_msgs rm_interfaces visualization_msgs tf2 tf2_ros tf2_eigen tf2_geometry_msgs pcl_conversions Eigen3)
+ament_export_libraries(${PROJECT_NAME}_geometry ${PROJECT_NAME}_timing ${PROJECT_NAME}_search)
+ament_export_dependencies(rclcpp rclcpp_action nav2_msgs sensor_msgs geometry_msgs nav_msgs std_msgs rm_interfaces visualization_msgs tf2 tf2_ros tf2_eigen tf2_geometry_msgs pcl_conversions Eigen3 opencv2)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
@@ -122,6 +155,14 @@ if(BUILD_TESTING)
         target_link_libraries(test_pointcloud_timing ${PROJECT_NAME}_timing)
         target_include_directories(test_pointcloud_timing PRIVATE include)
         ament_target_dependencies(test_pointcloud_timing sensor_msgs)
+    endif()
+
+    ament_add_gtest(test_tunnel_guidance_search
+        test/test_tunnel_guidance_search.cpp
+    )
+    if(TARGET test_tunnel_guidance_search)
+        target_link_libraries(test_tunnel_guidance_search ${PROJECT_NAME}_search)
+        target_include_directories(test_tunnel_guidance_search PRIVATE include)
     endif()
 endif()
 
