@@ -23,6 +23,7 @@
 #include <cstdint>
 
 #include "my_tunnel_guidance/tunnel_geometry_estimator.hpp"
+#include "my_tunnel_guidance/tunnel_guidance_search.hpp"
 #include "my_tunnel_guidance/tunnel_types.hpp"
 
 namespace my_tunnel_guidance {
@@ -89,17 +90,24 @@ private:
     bool transformGoalToMap(
         const geometry_msgs::msg::PoseStamped & input,
         geometry_msgs::msg::PoseStamped & output) const;
-    void advanceAutoGoalCandidate();
 
     void publishResults(
         const rclcpp::Time & stamp,
         const CenterlineEstimate & centerline,
-        bool valid);
+        bool valid,
+        bool use_path_endpoint_as_goal = false);
+
+    bool planNextInspectionGoal(
+        const std::vector<Eigen::Vector3d> & base_points,
+        const rclcpp::Time & stamp,
+        const Eigen::Isometry3d & base_to_output);
 
     double yawFromTangent(const Eigen::Vector3d & tangent) const;
 
     TunnelGeometryParams geometry_params_;
     TunnelGeometryEstimator estimator_;
+    TunnelGuidanceSearchParams search_params_;
+    std::unique_ptr<TunnelGuidanceSearch> searcher_;
 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
     rclcpp_action::Client<NavigateToPose>::SharedPtr auto_goal_client_;
@@ -174,9 +182,8 @@ private:
     rclcpp::Time dwell_start_time_{0, 0, RCL_ROS_TIME};
     uint8_t auto_goal_seq_ = 0;
     uint8_t active_auto_goal_seq_ = 0;
-    int auto_goal_candidate_count_ = 4;
-    double auto_goal_candidate_spacing_ = 1.0;
-    int auto_goal_candidate_index_ = 0;
+
+    bool search_requested_ = false;
 };
 
 }  // namespace my_tunnel_guidance

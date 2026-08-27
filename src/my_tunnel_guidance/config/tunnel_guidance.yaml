@@ -29,14 +29,31 @@ tunnel_guidance:
         centerline_point_spacing: 0.2
         lookahead_distance: 5.0
 
+        # Event-triggered local ESDF + Dijkstra inspection-goal search
+        search_resolution: 0.10
+        search_min_x: -0.5
+        search_max_x: 8.0
+        search_half_width: 3.0
+        search_obstacle_min_height: 0.15
+        search_obstacle_max_height: 1.30
+        search_robot_clearance: 0.30
+        search_clearance_weight: 2.0
+        search_clearance_decay: 0.50
+        # Unknown 区通行代价乘子（>=1）：路径允许穿过未观测区域，
+        # 但通过代价按此系数放大，倾向留在已确认的空地
+        search_unknown_cost_factor: 1.3
+        # Free 掩码形态学闭运算核边长（格，建议奇数；<3 关闭）：
+        # 弥合相邻射线之间假性 Unknown 缝隙，避免绕开逐帧漂移的观测空洞
+        search_free_close_kernel: 3
+        search_minimum_frontier_distance: 3.0
+        search_goal_distance: 5.0
+
         # Optional Nav2 auto goal
         enable_auto_goal: true
         auto_goal_frame_id: map
         min_goal_send_interval: 1.0
         # 到达后停留，capture_enable=true 通知电控开灯拍照；1s 后拉低，再等电控 capture_done
         auto_goal_dwell_time: 1.0
-        auto_goal_candidate_count: 4
-        auto_goal_candidate_spacing: 1.0
 
         # Initial calibration and wall model
         init_required_frames: 3
