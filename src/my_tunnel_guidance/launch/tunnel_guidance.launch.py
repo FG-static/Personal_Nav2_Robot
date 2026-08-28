@@ -17,6 +17,8 @@ def generate_launch_description():
         'auto_goal_dwell_time', default='8.0')
     allow_capture_done = LaunchConfiguration(
         'allow_capture_done', default='true')
+    wait_for_dataset = LaunchConfiguration(
+        'wait_for_dataset', default='true')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true')
@@ -29,6 +31,9 @@ def generate_launch_description():
     declare_allow_capture_done = DeclareLaunchArgument(
         'allow_capture_done', default_value='true',
         description='Wait for MCU capture_done on /tracker/gimbal before the next inspection goal')
+    declare_wait_for_dataset = DeclareLaunchArgument(
+        'wait_for_dataset', default_value='true',
+        description='Wait until the local inspection dataset is saved before departing')
 
     node = Node(
         package='my_tunnel_guidance',
@@ -40,6 +45,7 @@ def generate_launch_description():
             'enable_auto_goal': enable_auto_goal,
             'auto_goal_dwell_time': auto_goal_dwell_time,
             'allow_capture_done': allow_capture_done,
+            'wait_for_dataset': wait_for_dataset,
         }],
     )
 
@@ -48,5 +54,6 @@ def generate_launch_description():
         declare_enable_auto_goal,
         declare_auto_goal_dwell_time,
         declare_allow_capture_done,
+        declare_wait_for_dataset,
         node,
     ])

@@ -58,6 +58,13 @@ tunnel_guidance:
         # 仿真模拟电控：
         # ros2 topic pub --once /tracker/gimbal rm_interfaces/msg/Gimbal "{capture_done: true}"
         allow_capture_done: true
+        # dwell 内累积点云，dwell 结束后写入本地；~/dataset_ready 为 true 后才算落盘完成
+        enable_dataset_recording: true
+        wait_for_dataset: true
+        dataset_output_dir: /tmp/tunnel_inspections
+        dataset_voxel_size: 0.03
+        # 每站写入 clouds/ 分片，并增量合并到 map.pcd 作为整体点云地图
+        # 放行条件：MCU capture_done 与 ~/dataset_ready 同时为 true（可用 ~/can_depart 观察）
 
         # Initial calibration and wall model
         init_required_frames: 3

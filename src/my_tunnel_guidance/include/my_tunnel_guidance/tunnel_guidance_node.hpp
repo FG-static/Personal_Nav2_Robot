@@ -24,6 +24,7 @@
 
 #include "my_tunnel_guidance/tunnel_geometry_estimator.hpp"
 #include "my_tunnel_guidance/tunnel_guidance_search.hpp"
+#include "my_tunnel_guidance/inspection_dataset_recorder.hpp"
 #include "my_tunnel_guidance/tunnel_types.hpp"
 
 namespace my_tunnel_guidance {
@@ -87,6 +88,16 @@ private:
     void onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg);
     void setCaptureEnable(bool enable);
     void resetInspectionHandshake();
+    void publishHandshakeFlags();
+    bool inspectionCanDepart() const;
+    bool lookupMapPose(
+        const rclcpp::Time & stamp,
+        Eigen::Isometry3d & pose_map_base) const;
+    void startInspectionDataset(const rclcpp::Time & stamp);
+    void accumulateInspectionDataset(
+        const std::vector<Eigen::Vector3d> & base_points,
+        const rclcpp::Time & stamp);
+    void finishInspectionDataset(const rclcpp::Time & stamp);
     bool transformGoalToMap(
         const geometry_msgs::msg::PoseStamped & input,
         geometry_msgs::msg::PoseStamped & output) const;
@@ -120,6 +131,9 @@ private:
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr valid_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr exit_detected_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr capture_enable_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr dataset_ready_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr can_depart_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr merged_map_pub_;
     rclcpp::Subscription<rm_interfaces::msg::Gimbal>::SharedPtr gimbal_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr left_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr right_points_pub_;
@@ -176,10 +190,16 @@ private:
     bool has_sent_auto_goal_ = false;
     bool waiting_for_auto_goal_result_ = false;
     bool auto_goal_dwelling_ = false;
-    bool waiting_for_mcu_capture_ = false;
     bool mcu_capture_done_ = false;
     // true: wait for MCU capture_done. false: skip handshake.
     bool allow_capture_done_ = true;
+    bool enable_dataset_recording_ = true;
+    bool wait_for_dataset_ = true;
+    std::string dataset_output_dir_;
+    double dataset_voxel_size_ = 0.03;
+    bool waiting_to_depart_ = false;
+    bool dataset_ready_ = true;
+    InspectionDatasetRecorder dataset_recorder_;
     geometry_msgs::msg::PoseStamped latest_auto_goal_;
     geometry_msgs::msg::PoseStamped last_sent_auto_goal_;
     rclcpp::Time last_auto_goal_send_time_{0, 0, RCL_ROS_TIME};

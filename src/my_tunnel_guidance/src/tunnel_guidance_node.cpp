@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -97,6 +98,11 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
     auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 8.0);
     allow_capture_done_ = declare_parameter("allow_capture_done", true);
+    enable_dataset_recording_ = declare_parameter("enable_dataset_recording", true);
+    wait_for_dataset_ = declare_parameter("wait_for_dataset", true);
+    dataset_output_dir_ = declare_parameter(
+        "dataset_output_dir", std::string("/tmp/tunnel_inspections"));
+    dataset_voxel_size_ = declare_parameter("dataset_voxel_size", 0.03);
     if (auto_goal_dwell_time_ < 0.0) {
 
         auto_goal_dwell_time_ = 0.0;
@@ -136,6 +142,12 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
         "~/exit_detected", rclcpp::QoS(1).reliable().transient_local());
     capture_enable_pub_ = create_publisher<std_msgs::msg::Bool>(
         "/capture_enable", rclcpp::QoS(1).reliable().transient_local());
+    dataset_ready_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "~/dataset_ready", rclcpp::QoS(1).reliable().transient_local());
+    can_depart_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "~/can_depart", rclcpp::QoS(1).reliable().transient_local());
+    merged_map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+        "~/merged_map", rclcpp::QoS(1).reliable().transient_local());
     gimbal_sub_ = create_subscription<rm_interfaces::msg::Gimbal>(
         "/tracker/gimbal", rclcpp::QoS(10),
         std::bind(&TunnelGuidanceNode::onGimbal, this, std::placeholders::_1));
@@ -150,6 +162,19 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     exit_msg.data = false;
     exit_detected_pub_->publish(exit_msg);
     setCaptureEnable(false);
+
+    if (enable_dataset_recording_ &&
+        !dataset_recorder_.openMission(
+            std::filesystem::path(dataset_output_dir_),
+            auto_goal_frame_id_, dataset_voxel_size_))
+    {
+        RCLCPP_ERROR(
+            get_logger(),
+            "Failed to open inspection dataset directory %s",
+            dataset_output_dir_.c_str());
+        enable_dataset_recording_ = false;
+    }
+    publishHandshakeFlags();
 
     if (enable_auto_goal_) {
 
@@ -533,6 +558,9 @@ void TunnelGuidanceNode::pointCloudCallback(
         return;
     }
 
+    // 累积输出的离线数据
+    accumulateInspectionDataset(base_points, stamp);
+
     if (enable_auto_goal_ && search_requested_ &&
         planNextInspectionGoal(base_points, stamp, base_to_output)) {
 
@@ -911,29 +939,34 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
         }
         setCaptureEnable(false);
         auto_goal_dwelling_ = false;
-        waiting_for_mcu_capture_ = true;
-        mcu_capture_done_ = false;
+        waiting_to_depart_ = true;
+        finishInspectionDataset(now);
         RCLCPP_INFO(
             get_logger(),
-            "Auto goal dwell finished, capture_enable=false, waiting for MCU capture_done");
+            "Auto goal dwell finished, capture_enable=false, waiting for MCU "
+            "capture_done and local dataset_ready");
         return;
     }
 
-    if (waiting_for_mcu_capture_) {
+    if (waiting_to_depart_) {
 
-        if (!mcu_capture_done_ && allow_capture_done_) {
+        if (!inspectionCanDepart()) {
 
             RCLCPP_INFO_THROTTLE(
                 get_logger(), *get_clock(), 2000,
-                "Waiting for MCU capture_done before next inspection goal");
+                "Waiting to depart: mcu_done=%d (need=%d) dataset_ready=%d (need=%d)",
+                static_cast<int>(mcu_capture_done_),
+                static_cast<int>(allow_capture_done_),
+                static_cast<int>(dataset_ready_),
+                static_cast<int>(wait_for_dataset_));
             return;
         }
         RCLCPP_INFO(
             get_logger(),
-            allow_capture_done_ ?
-                "MCU capture_done, requesting next inspection search" :
-                "skip MCU handshake, requesting next inspection search");
-        waiting_for_mcu_capture_ = false;
+            "Inspection handshake complete (mcu=%d dataset=%d), requesting next search",
+            static_cast<int>(mcu_capture_done_ || !allow_capture_done_),
+            static_cast<int>(dataset_ready_ || !wait_for_dataset_));
+        waiting_to_depart_ = false;
         has_sent_auto_goal_ = false;
         has_latest_auto_goal_ = false;
         search_requested_ = true;
@@ -1047,10 +1080,11 @@ void TunnelGuidanceNode::autoGoalResultCallback(
 
         case rclcpp_action::ResultCode::SUCCEEDED:
             auto_goal_dwelling_ = true;
-            waiting_for_mcu_capture_ = false;
+            waiting_to_depart_ = false;
             mcu_capture_done_ = false;
             dwell_start_time_ = get_clock()->now();
             setCaptureEnable(true);
+            startInspectionDataset(dwell_start_time_);
             RCLCPP_INFO(
                 get_logger(),
                 "Auto goal succeeded, capture_enable=true, dwelling for %.1f s",
@@ -1081,10 +1115,12 @@ void TunnelGuidanceNode::autoGoalResultCallback(
 
 void TunnelGuidanceNode::onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg)
 {
-    if (waiting_for_mcu_capture_ && msg->capture_done && !mcu_capture_done_) {
-
+    if ((auto_goal_dwelling_ || waiting_to_depart_) &&
+        msg->capture_done && !mcu_capture_done_)
+    {
         mcu_capture_done_ = true;
         RCLCPP_INFO(get_logger(), "Received MCU capture_done=true");
+        publishHandshakeFlags();
     }
 }
 
@@ -1095,12 +1131,138 @@ void TunnelGuidanceNode::setCaptureEnable(bool enable)
     capture_enable_pub_->publish(msg);
 }
 
-void TunnelGuidanceNode::resetInspectionHandshake()
-{
+void TunnelGuidanceNode::resetInspectionHandshake() {
+
     auto_goal_dwelling_ = false;
-    waiting_for_mcu_capture_ = false;
+    waiting_to_depart_ = false;
     mcu_capture_done_ = false;
+    dataset_recorder_.abortStation();
+    dataset_ready_ = true;
     setCaptureEnable(false);
+    publishHandshakeFlags();
+}
+
+// 发布握手标志
+void TunnelGuidanceNode::publishHandshakeFlags() {
+
+    std_msgs::msg::Bool dataset_msg;
+    dataset_msg.data = dataset_ready_;
+    dataset_ready_pub_->publish(dataset_msg);
+
+    std_msgs::msg::Bool depart_msg;
+    depart_msg.data = inspectionCanDepart();
+    can_depart_pub_->publish(depart_msg);
+}
+
+// 检查是否可以离开
+bool TunnelGuidanceNode::inspectionCanDepart() const {
+
+    return (mcu_capture_done_ || !allow_capture_done_) &&
+        (dataset_ready_ || !wait_for_dataset_);
+}
+
+bool TunnelGuidanceNode::lookupMapPose(
+    const rclcpp::Time & stamp,
+    Eigen::Isometry3d & pose_map_base) const {
+
+    geometry_msgs::msg::TransformStamped transform;
+    if (!lookupTransformWithFallback(
+            auto_goal_frame_id_, estimation_frame_, stamp, transform)
+    ) {
+
+        return false;
+    }
+    pose_map_base = tf2::transformToEigen(transform);
+    return true;
+}
+
+void TunnelGuidanceNode::startInspectionDataset(const rclcpp::Time & stamp) {
+
+    dataset_ready_ = false;
+    if (!enable_dataset_recording_) {
+
+        dataset_ready_ = true;
+        publishHandshakeFlags();
+        return;
+    }
+
+    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+    if (!lookupMapPose(stamp, pose)) {
+
+        RCLCPP_WARN(
+            get_logger(),
+            "No %s pose at inspection start, recording with identity pose",
+            auto_goal_frame_id_.c_str());
+    }
+    if (!dataset_recorder_.beginStation(stamp.nanoseconds(), pose)) {
+
+        RCLCPP_ERROR(get_logger(), "Failed to begin inspection dataset station");
+        dataset_ready_ = false;
+        publishHandshakeFlags();
+        return;
+    }
+    publishHandshakeFlags();
+}
+
+void TunnelGuidanceNode::accumulateInspectionDataset(
+    const std::vector<Eigen::Vector3d> & base_points,
+    const rclcpp::Time & stamp
+) {
+
+    if (!dataset_recorder_.stationActive()) {
+
+        return;
+    }
+
+    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+    if (!lookupMapPose(stamp, pose)) {
+
+        return;
+    }
+
+    std::vector<Eigen::Vector3d> map_points;
+    map_points.reserve(base_points.size());
+    for (const Eigen::Vector3d & point : base_points) {
+
+        map_points.push_back(pose * point);
+    }
+    dataset_recorder_.addScan(map_points, pose);
+}
+
+void TunnelGuidanceNode::finishInspectionDataset(const rclcpp::Time & stamp) {
+
+    if (!enable_dataset_recording_ || !dataset_recorder_.stationActive()) {
+
+        dataset_ready_ = true;
+        publishHandshakeFlags();
+        return;
+    }
+
+    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+    lookupMapPose(stamp, pose);
+    InspectionStationSummary summary;
+    if (!dataset_recorder_.finishStation(stamp.nanoseconds(), pose, summary)) {
+
+        RCLCPP_ERROR(
+            get_logger(),
+            "Failed to save inspection dataset station, holding departure");
+        dataset_ready_ = false;
+        publishHandshakeFlags();
+        return;
+    }
+
+    dataset_ready_ = true;
+    RCLCPP_INFO(
+        get_logger(),
+        "Saved inspection station %d: %s points=%zu scans=%d drift=%.3f m merged=%zu",
+        summary.id, summary.cloud_relpath.c_str(), summary.point_count,
+        summary.scan_count, summary.max_drift_m, summary.merged_point_count);
+    sensor_msgs::msg::PointCloud2 merged_msg;
+    pcl::toROSMsg(dataset_recorder_.mergedCloud(), merged_msg);
+    merged_msg.header.stamp = stamp;
+    merged_msg.header.frame_id = auto_goal_frame_id_;
+    merged_map_pub_->publish(merged_msg);
+    publishHandshakeFlags();
 }
 
 bool TunnelGuidanceNode::transformGoalToMap(
