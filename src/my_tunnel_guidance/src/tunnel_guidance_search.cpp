@@ -870,4 +870,88 @@ TunnelGuidanceSearchResult TunnelGuidanceSearch::searchGrid(
     return makeResult(grid, data, endpoint);
 }
 
+TunnelExitObservation TunnelGuidanceSearch::observeExit(
+    const std::vector<Eigen::Vector3d> & base_points,
+    const TunnelExitWindow & window) const
+{
+    return observeExit(buildGridFromPoints(base_points), window);
+}
+
+TunnelExitObservation TunnelGuidanceSearch::observeExit(
+    const TunnelGrid & grid,
+    const TunnelExitWindow & window)
+{
+    TunnelExitObservation observation;
+    if (!isValidGrid(grid) ||
+        !std::isfinite(window.min_x) || !std::isfinite(window.max_x) ||
+        window.max_x <= window.min_x ||
+        window.wall_outer_y <= window.wall_inner_y ||
+        window.wall_inner_y < 0.0 ||
+        window.front_half_width < 0.0 ||
+        window.max_front_columns < 0)
+    {
+        return observation;
+    }
+
+    observation.valid = true;
+    for (int mx = 0; mx < grid.width; ++mx) {
+        const double x = cellToWorld(grid, mx, 0).x();
+        if (x < window.min_x || x > window.max_x) {
+            continue;
+        }
+
+        bool left_wall = false;
+        bool right_wall = false;
+        bool front_block = false;
+        for (int my = 0; my < grid.height; ++my) {
+            const std::size_t index = toIndex(grid, mx, my);
+            if (grid.states[index] != GridState::Occupied) {
+                continue;
+            }
+            const double y = cellToWorld(grid, mx, my).y();
+            if (std::abs(y) <= window.front_half_width) {
+                front_block = true;
+            }
+            if (y >= window.wall_inner_y && y <= window.wall_outer_y) {
+                left_wall = true;
+            }
+            if (y <= -window.wall_inner_y && y >= -window.wall_outer_y) {
+                right_wall = true;
+            }
+        }
+
+        ++observation.columns;
+        if (left_wall) {
+            ++observation.left_columns;
+        }
+        if (right_wall) {
+            ++observation.right_columns;
+        }
+        if (front_block) {
+            ++observation.front_columns;
+        }
+    }
+
+    if (observation.columns > 0) {
+        const double columns = static_cast<double>(observation.columns);
+        observation.left_column_ratio =
+            static_cast<double>(observation.left_columns) / columns;
+        observation.right_column_ratio =
+            static_cast<double>(observation.right_columns) / columns;
+        observation.front_column_ratio =
+            static_cast<double>(observation.front_columns) / columns;
+    }
+
+    observation.corridor_present =
+        observation.columns > 0 &&
+        observation.left_column_ratio >= window.min_side_column_ratio &&
+        observation.right_column_ratio >= window.min_side_column_ratio;
+    observation.open_ahead =
+        observation.columns > 0 &&
+        observation.left_column_ratio <= window.max_open_column_ratio &&
+        observation.right_column_ratio <= window.max_open_column_ratio &&
+        observation.front_columns <= std::max(0, window.max_front_columns);
+    return observation;
+}
+
 }  // namespace my_tunnel_guidance

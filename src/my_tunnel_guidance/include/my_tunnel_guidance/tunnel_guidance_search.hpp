@@ -41,6 +41,35 @@ struct TunnelGuidanceSearchResult {
     bool valid = false;
 };
 
+// Forward-looking exit cue from the occupancy grid (base_link).
+// Ignores walls behind the robot, which is why PCA point counts fail at the mouth.
+struct TunnelExitWindow {
+
+    double min_x = 2.0;
+    double max_x = 6.0;
+    double wall_inner_y = 1.0;
+    double wall_outer_y = 2.8;
+    double front_half_width = 0.8;
+    double min_side_column_ratio = 0.35;
+    double max_open_column_ratio = 0.18;
+    // Absolute cap, not a ratio: a thin end-wall is only a few x-columns.
+    int max_front_columns = 2;
+};
+
+struct TunnelExitObservation {
+
+    int columns = 0;
+    int left_columns = 0;
+    int right_columns = 0;
+    int front_columns = 0;
+    double left_column_ratio = 0.0;
+    double right_column_ratio = 0.0;
+    double front_column_ratio = 0.0;
+    bool valid = false;
+    bool corridor_present = false;
+    bool open_ahead = false;
+};
+
 struct SearchDebugFrame {
 
     int width = 0;
@@ -77,6 +106,14 @@ public:
     TunnelGuidanceSearchResult searchGrid(
         const TunnelGrid & grid,
         const SearchDebugCallback & debug_callback = {}) const;
+
+    TunnelExitObservation observeExit(
+        const std::vector<Eigen::Vector3d> & base_points,
+        const TunnelExitWindow & window = {}) const;
+
+    static TunnelExitObservation observeExit(
+        const TunnelGrid & grid,
+        const TunnelExitWindow & window = {});
 
 private:
 

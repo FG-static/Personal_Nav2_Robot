@@ -341,4 +341,106 @@ TEST(TunnelGuidanceSearch, RejectsInvalidUnknownCostFactor)
     EXPECT_FALSE(result.valid);
 }
 
+TunnelGrid makeForwardWindowGrid(
+    bool left_wall,
+    bool right_wall,
+    bool closing_wall)
+{
+    TunnelGrid grid;
+    grid.width = 90;
+    grid.height = 60;
+    grid.resolution = 0.1;
+    grid.origin = Eigen::Vector2d(-0.5, -3.0);
+    grid.states.assign(
+        static_cast<std::size_t>(grid.width) *
+        static_cast<std::size_t>(grid.height), GridState::Unknown);
+
+    for (int mx = 0; mx < grid.width; ++mx) {
+        const double x = grid.origin.x() +
+            (static_cast<double>(mx) + 0.5) * grid.resolution;
+        for (int my = 0; my < grid.height; ++my) {
+            const double y = grid.origin.y() +
+                (static_cast<double>(my) + 0.5) * grid.resolution;
+            const std::size_t index =
+                static_cast<std::size_t>(my * grid.width + mx);
+            if (x >= 0.0 && x <= 7.0 && std::abs(y) < 1.9) {
+                grid.states[index] = GridState::Free;
+            }
+            if (left_wall && x >= 0.0 && x <= 7.0 && y >= 1.95 && y <= 2.15) {
+                grid.states[index] = GridState::Occupied;
+            }
+            if (right_wall && x >= 0.0 && x <= 7.0 && y <= -1.95 && y >= -2.15) {
+                grid.states[index] = GridState::Occupied;
+            }
+            if (closing_wall && x >= 4.5 && x <= 5.5 && std::abs(y) <= 0.7) {
+                grid.states[index] = GridState::Occupied;
+            }
+        }
+    }
+    return grid;
+}
+
+TEST(TunnelGuidanceSearch, ExitObserveDetectsTwoSidedCorridor)
+{
+    const auto observation = TunnelGuidanceSearch::observeExit(
+        makeForwardWindowGrid(true, true, false));
+    ASSERT_TRUE(observation.valid);
+    EXPECT_TRUE(observation.corridor_present);
+    EXPECT_FALSE(observation.open_ahead);
+}
+
+TEST(TunnelGuidanceSearch, ExitObserveDetectsOpenMouth)
+{
+    const auto observation = TunnelGuidanceSearch::observeExit(
+        makeForwardWindowGrid(false, false, false));
+    ASSERT_TRUE(observation.valid);
+    EXPECT_FALSE(observation.corridor_present);
+    EXPECT_TRUE(observation.open_ahead);
+}
+
+TEST(TunnelGuidanceSearch, ExitObserveRejectsClosingWall)
+{
+    const auto observation = TunnelGuidanceSearch::observeExit(
+        makeForwardWindowGrid(false, false, true));
+    ASSERT_TRUE(observation.valid);
+    EXPECT_FALSE(observation.open_ahead);
+}
+
+TEST(TunnelGuidanceSearch, ExitObserveIgnoresOneSidedWall)
+{
+    const auto observation = TunnelGuidanceSearch::observeExit(
+        makeForwardWindowGrid(true, false, false));
+    ASSERT_TRUE(observation.valid);
+    EXPECT_FALSE(observation.corridor_present);
+    EXPECT_FALSE(observation.open_ahead);
+}
+
+TEST(TunnelGuidanceSearch, ExitObserveIgnoresWallsBehindRobot)
+{
+    TunnelGrid grid = makeForwardWindowGrid(false, false, false);
+    for (int mx = 0; mx < grid.width; ++mx) {
+        const double x = grid.origin.x() +
+            (static_cast<double>(mx) + 0.5) * grid.resolution;
+        if (x < -0.05 || x > 0.8) {
+            continue;
+        }
+        for (int my = 0; my < grid.height; ++my) {
+            const double y = grid.origin.y() +
+                (static_cast<double>(my) + 0.5) * grid.resolution;
+            const std::size_t index =
+                static_cast<std::size_t>(my * grid.width + mx);
+            if (y >= 1.95 && y <= 2.15) {
+                grid.states[index] = GridState::Occupied;
+            }
+            if (y <= -1.95 && y >= -2.15) {
+                grid.states[index] = GridState::Occupied;
+            }
+        }
+    }
+
+    const auto observation = TunnelGuidanceSearch::observeExit(grid);
+    ASSERT_TRUE(observation.valid);
+    EXPECT_TRUE(observation.open_ahead);
+}
+
 

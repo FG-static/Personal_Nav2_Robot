@@ -87,6 +87,7 @@ private:
     void onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg);
     void setCaptureEnable(bool enable);
     void resetInspectionHandshake();
+    void updateExitDetection(const std::vector<Eigen::Vector3d> & base_points);
     bool transformGoalToMap(
         const geometry_msgs::msg::PoseStamped & input,
         geometry_msgs::msg::PoseStamped & output) const;
@@ -149,8 +150,7 @@ private:
     double ground_band_ = 0.15;
     bool exit_detection_enabled_ = true;
     int exit_confirm_frames_ = 5;
-    int exit_max_wall_points_ = 60;
-    int exit_min_ground_points_ = 100;
+    TunnelExitWindow exit_window_;
     bool enable_auto_goal_ = false;
     std::string auto_goal_frame_id_ = "map";
     double min_goal_send_interval_ = 1.0;
@@ -160,6 +160,7 @@ private:
     int calibration_valid_frames_ = 0;
     int exit_candidate_frames_ = 0;
     bool exit_detected_ = false;
+    bool had_corridor_ = false;
 
     bool has_last_result_ = false;
     rclcpp::Time last_valid_time_{0, 0, RCL_ROS_TIME};
@@ -176,6 +177,8 @@ private:
     bool auto_goal_dwelling_ = false;
     bool waiting_for_mcu_capture_ = false;
     bool mcu_capture_done_ = false;
+    // true: wait for MCU capture_done. false: skip handshake (sim).
+    bool allow_capture_done_ = false;
     geometry_msgs::msg::PoseStamped latest_auto_goal_;
     geometry_msgs::msg::PoseStamped last_sent_auto_goal_;
     rclcpp::Time last_auto_goal_send_time_{0, 0, RCL_ROS_TIME};

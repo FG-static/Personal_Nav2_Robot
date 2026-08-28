@@ -54,6 +54,8 @@ tunnel_guidance:
         min_goal_send_interval: 1.0
         # 到达后停留，capture_enable=true 通知电控开灯拍照；1s 后拉低，再等电控 capture_done
         auto_goal_dwell_time: 1.0
+        # true: 等 MCU capture_done 再搜下一个点。false: 跳过握手（仿真）
+        allow_capture_done: false # 开始实车前务必打开
 
         # Initial calibration and wall model
         init_required_frames: 3
@@ -62,11 +64,22 @@ tunnel_guidance:
         wall_model_update_alpha: 0.1
         wall_position_jump_limit: 0.3
 
-        # Simple exit detection based on current wall and ground point support
+        # Exit: occupancy in a forward window, not PCA wall-point counts.
+        # Mid360 still sees walls behind the robot at the mouth, so 360° PCA
+        # counts never drop. Only columns with x in [min, max] are used.
+        # Must first see a two-sided corridor, then both side walls disappear
+        # without a closing wall across the front.
         exit_detection_enabled: true
         exit_confirm_frames: 5
-        exit_max_wall_points: 60
-        exit_min_ground_points: 100
+        exit_forward_min_x: 2.0
+        exit_forward_max_x: 6.0
+        exit_wall_inner_y: 1.0
+        exit_wall_outer_y: 2.8
+        exit_front_half_width: 0.8
+        exit_min_side_column_ratio: 0.35
+        exit_max_open_column_ratio: 0.18
+        # Thin end-wall occupies only a few x-columns in a 4 m window.
+        exit_max_front_columns: 2
 
         # Temporal stability
         filter_new_measurement_weight: 0.2
