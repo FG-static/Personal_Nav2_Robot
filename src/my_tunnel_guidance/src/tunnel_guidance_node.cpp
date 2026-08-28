@@ -96,6 +96,7 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
     auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 8.0);
+    allow_capture_done_ = declare_parameter("allow_capture_done", true);
     if (auto_goal_dwell_time_ < 0.0) {
 
         auto_goal_dwell_time_ = 0.0;
@@ -133,6 +134,11 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     valid_pub_ = create_publisher<std_msgs::msg::Bool>("~/valid", rclcpp::QoS(1));
     exit_detected_pub_ = create_publisher<std_msgs::msg::Bool>(
         "~/exit_detected", rclcpp::QoS(1).reliable().transient_local());
+    capture_enable_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "/capture_enable", rclcpp::QoS(1).reliable().transient_local());
+    gimbal_sub_ = create_subscription<rm_interfaces::msg::Gimbal>(
+        "/tracker/gimbal", rclcpp::QoS(10),
+        std::bind(&TunnelGuidanceNode::onGimbal, this, std::placeholders::_1));
     left_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/left_points", rclcpp::SensorDataQoS());
     right_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -143,6 +149,7 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     std_msgs::msg::Bool exit_msg;
     exit_msg.data = false;
     exit_detected_pub_->publish(exit_msg);
+    setCaptureEnable(false);
 
     if (enable_auto_goal_) {
 
@@ -744,7 +751,7 @@ void TunnelGuidanceNode::publishResults(
                 waiting_for_auto_goal_result_ = false;
                 has_sent_auto_goal_ = false;
             }
-            auto_goal_dwelling_ = false;
+            resetInspectionHandshake();
             has_latest_auto_goal_ = false;
         } else {
 
@@ -759,7 +766,7 @@ void TunnelGuidanceNode::publishResults(
                 auto_goal_client_->async_cancel_all_goals();
                 waiting_for_auto_goal_result_ = false;
                 has_sent_auto_goal_ = false;
-                auto_goal_dwelling_ = false;
+                resetInspectionHandshake();
             }
         }
     }
@@ -883,8 +890,9 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
             waiting_for_auto_goal_result_ = false;
             has_sent_auto_goal_ = false;
         }
-        auto_goal_dwelling_ = false;
+        resetInspectionHandshake();
         has_latest_auto_goal_ = false;
+        search_requested_ = false;
         return;
     }
 
@@ -901,11 +909,35 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
             return;
         }
-        RCLCPP_INFO(get_logger(), "Auto goal dwell finished, planning next goal");
+        setCaptureEnable(false);
         auto_goal_dwelling_ = false;
+        waiting_for_mcu_capture_ = true;
+        mcu_capture_done_ = false;
+        RCLCPP_INFO(
+            get_logger(),
+            "Auto goal dwell finished, capture_enable=false, waiting for MCU capture_done");
+        return;
+    }
+
+    if (waiting_for_mcu_capture_) {
+
+        if (!mcu_capture_done_ && allow_capture_done_) {
+
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Waiting for MCU capture_done before next inspection goal");
+            return;
+        }
+        RCLCPP_INFO(
+            get_logger(),
+            allow_capture_done_ ?
+                "MCU capture_done, requesting next inspection search" :
+                "skip MCU handshake, requesting next inspection search");
+        waiting_for_mcu_capture_ = false;
         has_sent_auto_goal_ = false;
         has_latest_auto_goal_ = false;
         search_requested_ = true;
+        return;
     }
 
     if (search_requested_ || !has_latest_auto_goal_) {
@@ -1015,32 +1047,60 @@ void TunnelGuidanceNode::autoGoalResultCallback(
 
         case rclcpp_action::ResultCode::SUCCEEDED:
             auto_goal_dwelling_ = true;
+            waiting_for_mcu_capture_ = false;
+            mcu_capture_done_ = false;
             dwell_start_time_ = get_clock()->now();
+            setCaptureEnable(true);
             RCLCPP_INFO(
                 get_logger(),
-                "Auto goal succeeded, dwelling for %.1f s",
+                "Auto goal succeeded, capture_enable=true, dwelling for %.1f s",
                 auto_goal_dwell_time_);
             break;
         case rclcpp_action::ResultCode::ABORTED:
-            RCLCPP_WARN(get_logger(), "Auto goal aborted, planning a new goal");
+            RCLCPP_WARN(get_logger(), "Auto goal aborted, planning a new inspection goal");
             has_sent_auto_goal_ = false;
             has_latest_auto_goal_ = false;
+            resetInspectionHandshake();
             search_requested_ = true;
             break;
         case rclcpp_action::ResultCode::CANCELED:
             RCLCPP_INFO(get_logger(), "Auto goal canceled");
             has_sent_auto_goal_ = false;
             has_latest_auto_goal_ = false;
-            auto_goal_dwelling_ = false;
+            resetInspectionHandshake();
             search_requested_ = false;
             break;
         default:
             has_sent_auto_goal_ = false;
             has_latest_auto_goal_ = false;
-            auto_goal_dwelling_ = false;
+            resetInspectionHandshake();
             search_requested_ = true;
             break;
     }
+}
+
+void TunnelGuidanceNode::onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg)
+{
+    if (waiting_for_mcu_capture_ && msg->capture_done && !mcu_capture_done_) {
+
+        mcu_capture_done_ = true;
+        RCLCPP_INFO(get_logger(), "Received MCU capture_done=true");
+    }
+}
+
+void TunnelGuidanceNode::setCaptureEnable(bool enable)
+{
+    std_msgs::msg::Bool msg;
+    msg.data = enable;
+    capture_enable_pub_->publish(msg);
+}
+
+void TunnelGuidanceNode::resetInspectionHandshake()
+{
+    auto_goal_dwelling_ = false;
+    waiting_for_mcu_capture_ = false;
+    mcu_capture_done_ = false;
+    setCaptureEnable(false);
 }
 
 bool TunnelGuidanceNode::transformGoalToMap(

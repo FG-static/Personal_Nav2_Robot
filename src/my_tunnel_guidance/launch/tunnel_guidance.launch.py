@@ -15,6 +15,8 @@ def generate_launch_description():
     enable_auto_goal = LaunchConfiguration('enable_auto_goal', default='false')
     auto_goal_dwell_time = LaunchConfiguration(
         'auto_goal_dwell_time', default='8.0')
+    allow_capture_done = LaunchConfiguration(
+        'allow_capture_done', default='true')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true')
@@ -24,6 +26,9 @@ def generate_launch_description():
     declare_auto_goal_dwell_time = DeclareLaunchArgument(
         'auto_goal_dwell_time', default_value='8.0',
         description='Seconds to wait after reaching each auto goal')
+    declare_allow_capture_done = DeclareLaunchArgument(
+        'allow_capture_done', default_value='true',
+        description='Wait for MCU capture_done on /tracker/gimbal before the next inspection goal')
 
     node = Node(
         package='my_tunnel_guidance',
@@ -34,6 +39,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'enable_auto_goal': enable_auto_goal,
             'auto_goal_dwell_time': auto_goal_dwell_time,
+            'allow_capture_done': allow_capture_done,
         }],
     )
 
@@ -41,5 +47,6 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_enable_auto_goal,
         declare_auto_goal_dwell_time,
+        declare_allow_capture_done,
         node,
     ])
