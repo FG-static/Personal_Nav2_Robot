@@ -62,11 +62,22 @@ tunnel_guidance:
         wall_model_update_alpha: 0.1
         wall_position_jump_limit: 0.3
 
-        # Simple exit detection based on current wall and ground point support
+        # Exit: occupancy in a forward window, not PCA wall-point counts.
+        # Mid360 still sees walls behind the robot at the mouth, so 360° PCA
+        # counts never drop. Only columns with x in [min, max] are used.
+        # Must first see a two-sided corridor, then both side walls disappear
+        # without a closing wall across the front.
         exit_detection_enabled: true
         exit_confirm_frames: 5
-        exit_max_wall_points: 60
-        exit_min_ground_points: 100
+        exit_forward_min_x: 2.0
+        exit_forward_max_x: 6.0
+        exit_wall_inner_y: 1.0
+        exit_wall_outer_y: 2.8
+        exit_front_half_width: 0.8
+        exit_min_side_column_ratio: 0.35
+        exit_max_open_column_ratio: 0.18
+        # Thin end-wall occupies only a few x-columns in a 4 m window.
+        exit_max_front_columns: 2
 
         # Temporal stability
         filter_new_measurement_weight: 0.2

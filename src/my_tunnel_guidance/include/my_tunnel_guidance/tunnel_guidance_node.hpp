@@ -98,6 +98,8 @@ private:
         const rclcpp::Time & stamp,
         const Eigen::Isometry3d & base_to_output);
 
+    void updateExitDetection(const std::vector<Eigen::Vector3d> & base_points);
+
     double yawFromTangent(const Eigen::Vector3d & tangent) const;
 
     TunnelGeometryParams geometry_params_;
@@ -143,8 +145,7 @@ private:
     double ground_band_ = 0.15;
     bool exit_detection_enabled_ = true;
     int exit_confirm_frames_ = 5;
-    int exit_max_wall_points_ = 60;
-    int exit_min_ground_points_ = 100;
+    TunnelExitWindow exit_window_;
     bool enable_auto_goal_ = false;
     std::string auto_goal_frame_id_ = "map";
     double min_goal_send_interval_ = 1.0;
@@ -154,6 +155,7 @@ private:
     int calibration_valid_frames_ = 0;
     int exit_candidate_frames_ = 0;
     bool exit_detected_ = false;
+    bool had_corridor_ = false;
 
     bool has_last_result_ = false;
     rclcpp::Time last_valid_time_{0, 0, RCL_ROS_TIME};

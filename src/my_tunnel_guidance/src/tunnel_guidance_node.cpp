@@ -77,19 +77,20 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     ground_band_ = declare_parameter("ground_band", 0.15);
     exit_detection_enabled_ = declare_parameter("exit_detection_enabled", true);
     exit_confirm_frames_ = declare_parameter("exit_confirm_frames", 5);
-    exit_max_wall_points_ = declare_parameter("exit_max_wall_points", 60);
-    exit_min_ground_points_ = declare_parameter("exit_min_ground_points", 100);
+    exit_window_.min_x = declare_parameter("exit_forward_min_x", 2.0);
+    exit_window_.max_x = declare_parameter("exit_forward_max_x", 6.0);
+    exit_window_.wall_inner_y = declare_parameter("exit_wall_inner_y", 1.0);
+    exit_window_.wall_outer_y = declare_parameter("exit_wall_outer_y", 2.8);
+    exit_window_.front_half_width = declare_parameter("exit_front_half_width", 0.8);
+    exit_window_.min_side_column_ratio =
+        declare_parameter("exit_min_side_column_ratio", 0.35);
+    exit_window_.max_open_column_ratio =
+        declare_parameter("exit_max_open_column_ratio", 0.18);
+    exit_window_.max_front_columns =
+        declare_parameter("exit_max_front_columns", 2);
     if (exit_confirm_frames_ < 1) {
 
         exit_confirm_frames_ = 1;
-    }
-    if (exit_max_wall_points_ < 1) {
-
-        exit_max_wall_points_ = 1;
-    }
-    if (exit_min_ground_points_ < 1) {
-
-        exit_min_ground_points_ = 1;
     }
     enable_auto_goal_ = declare_parameter("enable_auto_goal", false);
     auto_goal_frame_id_ = declare_parameter("auto_goal_frame_id", "map");
@@ -512,6 +513,11 @@ void TunnelGuidanceNode::pointCloudCallback(
     if (!transformCloudToBase(cloud_msg, base_points))
         return;
 
+    if (exit_detection_enabled_) {
+
+        updateExitDetection(base_points);
+    }
+
     // BIEVR-LIO publishes odometry at the scan end, not at header.stamp.
     const rclcpp::Time stamp = pointCloudEndStamp(*cloud_msg);
     Eigen::Isometry3d base_to_output = Eigen::Isometry3d::Identity();
@@ -620,40 +626,6 @@ void TunnelGuidanceNode::pointCloudCallback(
 
         const TunnelFrameEstimate observed_frame =
             estimator_.estimateFrame(left_points, right_points, ground_points);
-
-        // 出口处通常仍能看到地面，但左右墙体点会明显减少；连续多帧确认后锁存状态。
-        if (exit_detection_enabled_) {
-
-            const bool ground_is_present =
-                ground_points.size() >= static_cast<std::size_t>(exit_min_ground_points_);
-            // 出口要求两侧墙点同时消失；单侧墙点不足更可能是遮挡或绕障，
-            // 不应直接触发出口锁存。
-            const bool wall_observation_invalid =
-                left_points.size() < static_cast<std::size_t>(exit_max_wall_points_) &&
-                right_points.size() < static_cast<std::size_t>(exit_max_wall_points_);
-            const bool exit_candidate = ground_is_present && wall_observation_invalid;
-
-            if (exit_candidate) {
-
-                ++exit_candidate_frames_;
-            } else {
-
-                exit_candidate_frames_ = 0;
-            }
-
-            if (!exit_detected_ && exit_candidate_frames_ >= exit_confirm_frames_) {
-
-                exit_detected_ = true;
-                RCLCPP_WARN(
-                    get_logger(),
-                    "Tunnel exit detected after %d consecutive candidate frames",
-                    exit_candidate_frames_);
-            }
-        }
-
-        std_msgs::msg::Bool exit_msg;
-        exit_msg.data = exit_detected_;
-        exit_detected_pub_->publish(exit_msg);
 
         if (!observed_frame.valid) {
 
@@ -845,6 +817,54 @@ void TunnelGuidanceNode::publishResults(
     std_msgs::msg::Bool valid_msg;
     valid_msg.data = valid;
     valid_pub_->publish(valid_msg);
+}
+
+void TunnelGuidanceNode::updateExitDetection(
+    const std::vector<Eigen::Vector3d> & base_points)
+{
+    const TunnelExitObservation observation =
+        searcher_->observeExit(base_points, exit_window_);
+    if (!observation.valid) {
+        return;
+    }
+
+    if (observation.corridor_present) {
+        had_corridor_ = true;
+    }
+
+    const bool exit_candidate = had_corridor_ && observation.open_ahead;
+    if (exit_candidate) {
+        ++exit_candidate_frames_;
+    } else if (!exit_detected_) {
+        exit_candidate_frames_ = 0;
+    }
+
+    RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Exit observe L=%.2f R=%.2f F=%.2f corridor=%d open=%d had=%d frames=%d/%d",
+        observation.left_column_ratio,
+        observation.right_column_ratio,
+        observation.front_column_ratio,
+        static_cast<int>(observation.corridor_present),
+        static_cast<int>(observation.open_ahead),
+        static_cast<int>(had_corridor_),
+        exit_candidate_frames_,
+        exit_confirm_frames_);
+
+    if (!exit_detected_ && exit_candidate_frames_ >= exit_confirm_frames_) {
+        exit_detected_ = true;
+        RCLCPP_WARN(
+            get_logger(),
+            "Tunnel exit detected after %d frames (L=%.2f R=%.2f F=%.2f)",
+            exit_candidate_frames_,
+            observation.left_column_ratio,
+            observation.right_column_ratio,
+            observation.front_column_ratio);
+    }
+
+    std_msgs::msg::Bool exit_msg;
+    exit_msg.data = exit_detected_;
+    exit_detected_pub_->publish(exit_msg);
 }
 
 void TunnelGuidanceNode::maybeSendAutoGoal() {
