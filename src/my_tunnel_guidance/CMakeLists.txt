@@ -23,7 +23,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(pcl_conversions REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common filters)
+find_package(PCL REQUIRED COMPONENTS common filters io)
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
@@ -101,8 +101,23 @@ ament_target_dependencies(${PROJECT_NAME}_search
     Eigen3
 )
 
+add_library(${PROJECT_NAME}_dataset
+    src/inspection_dataset_recorder.cpp
+)
+target_include_directories(${PROJECT_NAME}_dataset PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(${PROJECT_NAME}_dataset
+    ${PCL_LIBRARIES}
+)
+ament_target_dependencies(${PROJECT_NAME}_dataset
+    Eigen3
+)
+
 target_link_libraries(tunnel_guidance_node
     ${PROJECT_NAME}_search
+    ${PROJECT_NAME}_dataset
 )
 
 add_executable(tunnel_guidance_demo
@@ -116,12 +131,33 @@ target_link_libraries(tunnel_guidance_demo
     ${OpenCV_LIBS}
 )
 
+add_executable(inspection_dataset_live
+    tools/inspection_dataset_live.cpp
+)
+target_link_libraries(inspection_dataset_live
+    ${PROJECT_NAME}_dataset
+    ${PROJECT_NAME}_timing
+    ${PCL_LIBRARIES}
+)
+ament_target_dependencies(inspection_dataset_live
+    rclcpp
+    sensor_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
+    tf2_eigen
+    pcl_conversions
+    Eigen3
+)
+
 install(TARGETS
     tunnel_guidance_node
     tunnel_guidance_demo
+    inspection_dataset_live
     ${PROJECT_NAME}_geometry
     ${PROJECT_NAME}_timing
     ${PROJECT_NAME}_search
+    ${PROJECT_NAME}_dataset
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -135,7 +171,7 @@ install(DIRECTORY config launch
 )
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME}_geometry ${PROJECT_NAME}_timing ${PROJECT_NAME}_search)
+ament_export_libraries(${PROJECT_NAME}_geometry ${PROJECT_NAME}_timing ${PROJECT_NAME}_search ${PROJECT_NAME}_dataset)
 ament_export_dependencies(rclcpp rclcpp_action nav2_msgs sensor_msgs geometry_msgs nav_msgs std_msgs rm_interfaces visualization_msgs tf2 tf2_ros tf2_eigen tf2_geometry_msgs pcl_conversions Eigen3 opencv2)
 
 if(BUILD_TESTING)
@@ -163,6 +199,14 @@ if(BUILD_TESTING)
     if(TARGET test_tunnel_guidance_search)
         target_link_libraries(test_tunnel_guidance_search ${PROJECT_NAME}_search)
         target_include_directories(test_tunnel_guidance_search PRIVATE include)
+    endif()
+
+    ament_add_gtest(test_inspection_dataset_recorder
+        test/test_inspection_dataset_recorder.cpp
+    )
+    if(TARGET test_inspection_dataset_recorder)
+        target_link_libraries(test_inspection_dataset_recorder ${PROJECT_NAME}_dataset)
+        target_include_directories(test_inspection_dataset_recorder PRIVATE include)
     endif()
 endif()
 
