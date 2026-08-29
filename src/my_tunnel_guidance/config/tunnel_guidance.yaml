@@ -56,7 +56,7 @@ tunnel_guidance:
         auto_goal_dwell_time: 1.0
         # true: 等 MCU capture_done 再搜下一个点。false: 跳过握手（仿真）
         allow_capture_done: false # 开始实车前务必打开
-        # dwell 内把 ROI 点云变换到 map 并累积；结束后写入 PCD，并增量合并到 map.pcd
+        # dwell 内把原始 Mid360 变换到 map 并累积（不套导航 ROI）；结束后写入 PCD，并增量合并到 map.pcd
         enable_dataset_recording: true
         wait_for_dataset: true
         dataset_output_dir: /tmp/tunnel_inspections

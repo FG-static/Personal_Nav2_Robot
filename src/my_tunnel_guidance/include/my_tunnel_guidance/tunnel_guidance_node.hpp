@@ -95,7 +95,7 @@ private:
         Eigen::Isometry3d & pose_map_base) const;
     void startInspectionDataset(const rclcpp::Time & stamp);
     void accumulateInspectionDataset(
-        const std::vector<Eigen::Vector3d> & base_points,
+        const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg,
         const rclcpp::Time & stamp);
     void finishInspectionDataset(const rclcpp::Time & stamp);
     void updateExitDetection(const std::vector<Eigen::Vector3d> & base_points);

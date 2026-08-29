@@ -550,6 +550,10 @@ void TunnelGuidanceNode::pointCloudCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg
 ) {
 
+    // BIEVR-LIO publishes odometry at the scan end, not at header.stamp.
+    const rclcpp::Time stamp = pointCloudEndStamp(*cloud_msg);
+    accumulateInspectionDataset(cloud_msg, stamp);
+
     std::vector<Eigen::Vector3d> base_points;
     if (!transformCloudToBase(cloud_msg, base_points))
         return;
@@ -559,15 +563,11 @@ void TunnelGuidanceNode::pointCloudCallback(
         updateExitDetection(base_points);
     }
 
-    // BIEVR-LIO publishes odometry at the scan end, not at header.stamp.
-    const rclcpp::Time stamp = pointCloudEndStamp(*cloud_msg);
     Eigen::Isometry3d base_to_output = Eigen::Isometry3d::Identity();
     if (!getBaseToOutputTransform(stamp, base_to_output)) {
 
         return;
     }
-
-    accumulateInspectionDataset(base_points, stamp);
 
     if (enable_auto_goal_ && search_requested_ &&
         planNextInspectionGoal(base_points, stamp, base_to_output)) {
@@ -1162,7 +1162,7 @@ void TunnelGuidanceNode::startInspectionDataset(const rclcpp::Time & stamp)
 }
 
 void TunnelGuidanceNode::accumulateInspectionDataset(
-    const std::vector<Eigen::Vector3d> & base_points,
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr & cloud_msg,
     const rclcpp::Time & stamp
 ) {
 
@@ -1171,19 +1171,42 @@ void TunnelGuidanceNode::accumulateInspectionDataset(
         return;
     }
 
-    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-    if (!lookupMapPose(stamp, pose)) {
+    Eigen::Isometry3d pose_map_base = Eigen::Isometry3d::Identity();
+    if (!lookupMapPose(stamp, pose_map_base)) {
 
         return;
     }
 
-    std::vector<Eigen::Vector3d> map_points;
-    map_points.reserve(base_points.size());
-    for (const Eigen::Vector3d & point : base_points) {
+    geometry_msgs::msg::TransformStamped sensor_tf;
+    if (!lookupTransformWithFallback(
+            auto_goal_frame_id_, cloud_msg->header.frame_id, stamp, sensor_tf)) {
 
-        map_points.push_back(pose * point);
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), mutable_clock(*this), 2000,
+            "Cannot transform raw cloud to %s for inspection dataset",
+            auto_goal_frame_id_.c_str());
+        return;
     }
-    dataset_recorder_.addScan(map_points, pose);
+
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::fromROSMsg(*cloud_msg, cloud);
+    const Eigen::Isometry3d sensor_to_map = tf2::transformToEigen(sensor_tf);
+    std::vector<Eigen::Vector3d> map_points;
+    map_points.reserve(cloud.size());
+    for (const auto & point : cloud) {
+
+        if (!pcl::isFinite(point)) {
+
+            continue;
+        }
+        map_points.push_back(
+            sensor_to_map * Eigen::Vector3d(point.x, point.y, point.z));
+    }
+    if (map_points.empty()) {
+
+        return;
+    }
+    dataset_recorder_.addScan(map_points, pose_map_base);
 }
 
 void TunnelGuidanceNode::finishInspectionDataset(const rclcpp::Time & stamp)
