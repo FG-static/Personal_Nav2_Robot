@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -27,6 +28,7 @@ TunnelGuidanceSearchParams testParams()
     params.clearance_decay = 0.5;
     params.minimum_frontier_distance = 2.0;
     params.goal_distance = 4.0;
+    params.goal_heading_window = 2.0;
     params.debug_expansion_interval = 10U;
     return params;
 }
@@ -86,6 +88,42 @@ TunnelGrid makeShortKnownGrid()
             const double y = grid.origin.y() +
                 (static_cast<double>(my) + 0.5) * grid.resolution;
             if (std::abs(y) <= 0.8) {
+                grid.states[static_cast<std::size_t>(my * grid.width + mx)] =
+                    GridState::Free;
+            }
+        }
+    }
+    return grid;
+}
+
+TunnelGrid makeStraightGridWithShortJog()
+{
+    TunnelGrid grid;
+    grid.width = 100;
+    grid.height = 50;
+    grid.resolution = 0.1;
+    grid.origin = Eigen::Vector2d(-1.0, -2.5);
+    grid.states.assign(
+        static_cast<std::size_t>(grid.width) *
+        static_cast<std::size_t>(grid.height), GridState::Occupied);
+
+    for (int mx = 0; mx < grid.width; ++mx) {
+        const double x = grid.origin.x() +
+            (static_cast<double>(mx) + 0.5) * grid.resolution;
+        if (x < -0.1 || x > 8.0) {
+            continue;
+        }
+
+        double center_y = 0.0;
+        if (x >= 3.7 && x < 4.0) {
+            center_y = x - 3.7;
+        } else if (x >= 4.0) {
+            center_y = 0.3;
+        }
+        for (int my = 0; my < grid.height; ++my) {
+            const double y = grid.origin.y() +
+                (static_cast<double>(my) + 0.5) * grid.resolution;
+            if (std::abs(y - center_y) <= 0.25) {
                 grid.states[static_cast<std::size_t>(my * grid.width + mx)] =
                     GridState::Free;
             }
@@ -158,6 +196,33 @@ TEST(TunnelGuidanceSearch, FollowsCurvedKnownCorridor)
     const double goal_length = pathLengthToGoal(result.path, result.goal);
     EXPECT_GE(goal_length, params.goal_distance);
     EXPECT_LT(goal_length, params.goal_distance + 0.25);
+}
+
+TEST(TunnelGuidanceSearch, GoalHeadingRejectsShortTerminalGridJog)
+{
+    TunnelGuidanceSearchParams params = testParams();
+    params.robot_clearance = 0.1;
+    TunnelGuidanceSearch search(params);
+
+    const auto result = search.searchGrid(makeStraightGridWithShortJog());
+
+    ASSERT_TRUE(result.valid);
+    std::size_t goal_index = 0U;
+    while (goal_index < result.path.size() &&
+        (result.path[goal_index] - result.goal).head<2>().norm() >= 1e-6)
+    {
+        ++goal_index;
+    }
+    ASSERT_LT(goal_index, result.path.size());
+    const std::size_t legacy_begin = goal_index > 3U ? goal_index - 3U : 0U;
+    const std::size_t legacy_end = std::min(goal_index + 3U, result.path.size() - 1U);
+    const Eigen::Vector2d legacy_tangent =
+        (result.path[legacy_end] - result.path[legacy_begin]).head<2>().normalized();
+
+    EXPECT_GT(std::abs(legacy_tangent.y()), 0.30);
+    EXPECT_NEAR(result.goal_tangent.head<2>().norm(), 1.0, 1e-6);
+    EXPECT_GT(result.goal_tangent.x(), 0.98);
+    EXPECT_LT(std::abs(result.goal_tangent.y()), 0.20);
 }
 
 TEST(TunnelGuidanceSearch, AvoidsOccupiedBlockUsingClearanceField)
@@ -442,5 +507,4 @@ TEST(TunnelGuidanceSearch, ExitObserveIgnoresWallsBehindRobot)
     ASSERT_TRUE(observation.valid);
     EXPECT_TRUE(observation.open_ahead);
 }
-
 

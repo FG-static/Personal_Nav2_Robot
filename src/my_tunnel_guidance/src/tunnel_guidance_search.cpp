@@ -76,6 +76,8 @@ bool TunnelGuidanceSearch::parametersValid() const
            params_.minimum_frontier_distance >= 0.0 &&
            std::isfinite(params_.goal_distance) &&
            params_.goal_distance > 0.0 &&
+           std::isfinite(params_.goal_heading_window) &&
+           params_.goal_heading_window > 0.0 &&
            std::isfinite(params_.unknown_cost_factor) &&
            params_.unknown_cost_factor >= 1.0 &&
            params_.free_close_kernel >= 0;
@@ -570,19 +572,40 @@ TunnelGuidanceSearchResult TunnelGuidanceSearch::makeResult(
     result.goal = goal;
     result.goal_clearance = data.esdf_distances[static_cast<std::size_t>(goal_cell)];
 
-    // 用目标点前后窗口内的路径段方向作为目标朝向（切线），
-    // 窗口退化时退回上一点到目标点的方向
-    const std::size_t tangent_window = 3U;
-    const std::size_t tangent_begin =
-        goal_path_index > tangent_window ? goal_path_index - tangent_window : 0U;
-    const std::size_t tangent_end = std::min(
-        goal_path_index + tangent_window,
-        result.path.size() - 1U);
-    Eigen::Vector2d tangent =
-        (result.path[tangent_end] - result.path[tangent_begin]).head<2>();
-    if (tangent.norm() <= kEpsilon && goal_path_index > 0U) {
+    // 按物理距离取目标前路径，并对 p(s) 做最小二乘直线拟合。
+    // 相比固定取几个栅格点，该方向不会被末端单个水平/对角步直接带歪。
+    std::size_t tangent_begin = goal_path_index;
+    while (tangent_begin > 0U &&
+        cumulative_lengths[goal_path_index] - cumulative_lengths[tangent_begin] <
+        params_.goal_heading_window)
+    {
+        --tangent_begin;
+    }
+
+    double mean_s = 0.0;
+    Eigen::Vector2d mean_point = Eigen::Vector2d::Zero();
+    const std::size_t tangent_point_count = goal_path_index - tangent_begin + 1U;
+    for (std::size_t i = tangent_begin; i <= goal_path_index; ++i) {
+        mean_s += cumulative_lengths[i] - cumulative_lengths[tangent_begin];
+        mean_point += result.path[i].head<2>();
+    }
+    mean_s /= static_cast<double>(tangent_point_count);
+    mean_point /= static_cast<double>(tangent_point_count);
+
+    double s_variance = 0.0;
+    Eigen::Vector2d tangent = Eigen::Vector2d::Zero();
+    for (std::size_t i = tangent_begin; i <= goal_path_index; ++i) {
+        const double centered_s =
+            cumulative_lengths[i] - cumulative_lengths[tangent_begin] - mean_s;
+        s_variance += centered_s * centered_s;
+        tangent += centered_s * (result.path[i].head<2>() - mean_point);
+    }
+    if (s_variance > kEpsilon) {
+        tangent /= s_variance;
+    }
+    if (tangent.norm() <= kEpsilon && goal_path_index > tangent_begin) {
         tangent = (result.path[goal_path_index] -
-            result.path[goal_path_index - 1U]).head<2>();
+            result.path[tangent_begin]).head<2>();
     }
     if (tangent.norm() <= kEpsilon) {
         tangent = Eigen::Vector2d::UnitX();

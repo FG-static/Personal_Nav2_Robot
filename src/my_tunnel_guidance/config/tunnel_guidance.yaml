@@ -47,6 +47,8 @@ tunnel_guidance:
         search_free_close_kernel: 3
         search_minimum_frontier_distance: 3.0
         search_goal_distance: 5.0
+        # 用目标前 2m 路径拟合巡检朝向，避免末端单个对角栅格步带歪 yaw
+        search_goal_heading_window: 2.0
 
         # Optional Nav2 auto goal
         enable_auto_goal: true
