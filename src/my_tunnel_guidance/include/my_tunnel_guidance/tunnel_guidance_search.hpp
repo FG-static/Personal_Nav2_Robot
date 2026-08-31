@@ -25,6 +25,8 @@ struct TunnelGuidanceSearchParams {
     double clearance_decay = 0.50;
     double minimum_frontier_distance = 3.0;
     double goal_distance = 5.0;
+    // 目标前方位拟合窗口（沿路径长度，单位：m），抑制栅格末端方向跳变
+    double goal_heading_window = 2.0;
     // 未知区边代价乘子（>=1）：路径允许穿过未观测区域，但更倾向留在确认空地
     double unknown_cost_factor = 1.3;
     // Free 掩码形态学闭运算核边长（单位：格，建议奇数；<3 表示关闭）

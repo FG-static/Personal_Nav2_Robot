@@ -75,6 +75,8 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
         "search_minimum_frontier_distance", 3.0);
     search_params_.goal_distance = declare_parameter(
         "search_goal_distance", lookahead_distance_);
+    search_params_.goal_heading_window = declare_parameter(
+        "search_goal_heading_window", 2.0);
     search_params_.debug_expansion_interval = 0U;
 
     filter_alpha_ = declare_parameter("filter_new_measurement_weight", 0.2);
@@ -541,8 +543,9 @@ bool TunnelGuidanceNode::planNextInspectionGoal(
     const Eigen::Vector3d goal_output = centerline.points.back();
     RCLCPP_INFO(
         get_logger(),
-        "Planned next inspection goal once: x=%.2f y=%.2f clearance=%.2f",
-        goal_output.x(), goal_output.y(), search_result.goal_clearance);
+        "Planned next inspection goal once: x=%.2f y=%.2f yaw=%.2f clearance=%.2f",
+        goal_output.x(), goal_output.y(),
+        yawFromTangent(centerline.tangents.back()), search_result.goal_clearance);
     return true;
 }
 
