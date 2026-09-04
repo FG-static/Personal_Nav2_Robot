@@ -69,7 +69,17 @@ if(BUILD_TESTING)
   # comment the line when this package is in a git repo and when
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
+  # 本包遵循 AGENTS.md 的 K&R 大括号风格，与 uncrustify 的 ROS2 默认
+  # 配置（namespace 换行大括号）冲突，且既有代码均按 K&R 编写，跳过之
+  set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_astar_planner test/test_astar_planner.cpp)
+  if(TARGET test_astar_planner)
+    target_link_libraries(test_astar_planner ${PROJECT_NAME}_lib)
+    target_include_directories(test_astar_planner PRIVATE include)
+  endif()
 endif()
 
 ament_package()
