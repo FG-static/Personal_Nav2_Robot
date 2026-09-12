@@ -67,7 +67,41 @@ Working tree on `humble` (not committed unless FGoose asks):
   - `src/my_nav2_robot/launch/livox_mid360.launch.py`
   - `src/my_nav2_robot/config/MID360_config.json` (**strict JSON**, no `//` comments; RapidJSON in the official driver rejects comments)
   - `src/my_nav2_robot/scripts/check_mid360_net.sh`
-- `package.xml`: `exec_depend` `joint_state_publisher` only for this bringup. No `gz_plugin_vendor`.
+- `package.xml`: `exec_depend` `joint_state_publisher` only for this bringup. No `gz_plugin_vendor`. (2026-09-12: also added `rclpy`, which was missing despite existing Python nodes.)
+
+## Real-robot SLAM mode (2026-09-13)
+
+A brief `real_sensor_data` sim-hybrid mode was added and then **removed** on 2026-09-13 (FGoose: no point running Gazebo once the real Mid360 feeds the stack). Working tree is back to the pre-hybrid state for gazebo_sim/full_navigation/xacros/livox launch; `package.xml` keeps the `rclpy` addition.
+
+The real mode is **`full_navigation_real.launch.py`** (port of the culvert_nav historical file, now with sensor sources built in):
+
+```bash
+ros2 launch my_nav2_robot full_navigation_real.launch.py            # slam:=True, serial:=true, rviz:=true
+```
+
+- Includes `hardware_bringup.launch.py`: real Mid360 driver (`/livox/lidar` + `/livox/imu`), pointcloud_to_laserscan (`/scan`), RSP/JSP. `use_sim_time` stays false.
+- `nav2_bringup` with slam:=True (slam_toolbox publishes map->odom), params `nav2_params_slam_diff.yaml` (or slam.yaml for mecanum), `odom_topic` rewritten to `/bievr_lio/odom`, `tf_broadcast:=False`. slam:=False falls back to AMCL + map_server + identity static map->odom.
+- `serial:=true` (default) starts `rm_serial_driver` on /dev/ttyACM0 for /cmd_vel -> MCU. `tunnel_guidance` is NOT started (dropped on 2026-09-13, re-add later if asked).
+- **BIEVR-LIO runs in a separate terminal** (Ceres conflict) and must start **before/with** Nav2, or local_costmap logs odom-TF timeouts until it appears:
+
+```bash
+source /home/nav/bievr_ws/quick_source.sh
+ros2 launch bievr_lio_ros2 process_topics.launch.py sensor_config:=nav2_real params:=params rviz:=false
+```
+
+- New sensor config `bievr_ws/src/BIEVR-LIO/config/sensor_configs/nav2_real.yaml` (bievr_ws is **not** a git repo): topics /livox/lidar + /livox/imu, Mid360 built-in IMU extrinsic `[0.04165, 0.02326, -0.0284]` (same as gamma/mars), `imu.normalized: 1.0` because livox_ros_driver2 passes the Mid360 IMU through in **g units** (Gazebo publishes m/s^2 — that is why nav2_sim has normalized: 0), max range 40 m, `map.frame: odom`, `imu.frame: base_footprint`. With `use_sim_time:=auto` (default) this name stays on wall clock.
+- Verified end-to-end 2026-09-13 on the live Mid360: sensors 10 Hz / 200 Hz, /scan wall-clock stamped, BIEVR odom + odom->base_footprint TF, slam_toolbox /map, both lifecycle managers active.
+- `tunnel:=true` starts my_tunnel_guidance auto inspection; `allow_capture_done` default true (MCU capture_done handshake via /capture_enable -> rm_serial_driver -> MCU, chassis-status capture_done back to the node). tunnel_guidance.yaml has enable_auto_goal: true.
+- Synced to **culvert_nav** (2026-09-13, per FGoose request; it is the workspace he runs on the robot): copied `hardware_bringup.launch.py`, `livox_mid360.launch.py`, `MID360_config.json`, `check_mid360_net.sh`, and the identical `full_navigation_real.launch.py` (culvert_nav CMake got the check script in install(PROGRAMS)); rebuilt its my_nav2_robot. culvert_nav has only robot_diff.urdf.xacro (no mecanum) and bare tunnel_guidance.launch.py. Running culvert_nav needs `/opt/ros/humble` + `/home/nav/livox_ws/install` + `/home/nav/culvert_nav/install` sourced; BIEVR still from bievr_ws with `sensor_config:=nav2_real`.
+
+## Launch-environment gotchas (learned 2026-09-12/13)
+
+- **Always verify Gazebo is fully dead after test cleanups**: `pkill -9 -f "[g]zserver"` alone can leave an orphan holding Gazebo Master port **11345**; the next launch's gzserver then dies with `Unable to start server[bind: Address already in use]` (exit 255 / SIGABRT) — no world, no robot, spawn_entity hangs until timeout. Check with `ss -ltn | grep 11345` and loop-kill until free.
+- Signal-based cleanup (`kill $LPID`, `pkill -f`) from the agent shell has **repeatedly failed silently** here (a `ros2 launch` tree and its gzserver survived twice). Kill by explicit PID from `ps`/`pgrep` output, then re-run the listing to confirm; never trust a single pkill.
+- A 2026-09-13 rviz2 segfault (exit -11, `segfault ... in librviz_common.so`, journal `kernel: traps`) happened only in a port-conflicted session (dead gzserver world + gzclient attached to an orphaned world). Same rviz config ran 25 s clean on display :0 once the orphan was killed. If rviz segfaults again: check `journalctl -b | grep -i segfault` for the faulting lib, confirm port 11345 is free, then bisect with `rviz:=false`.
+- livox_ros_driver2 dying with `trap stack segment ... in libspdlog.so` (exit -7) during launch teardown is a shutdown artifact, not a runtime failure.
+- Humble rclpy has **no `SensorDataQoS` class** — use `qos_profile_sensor_data` from `rclpy.qos` (bit us when the bridge was written).
+- New `install(PROGRAMS ...)` scripts must be `chmod +x` in `src` or launch fails with "executable not found" even though the symlink exists.
 
 ## How to source on this machine
 
