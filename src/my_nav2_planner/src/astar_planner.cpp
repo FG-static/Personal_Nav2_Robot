@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <unordered_map>
 
 namespace my_nav2_planner {
@@ -45,6 +47,10 @@ namespace my_nav2_planner {
         if (obstacle_cost_weight_ < 0.0) {
             obstacle_cost_weight_ = 0.0;
         }
+        // >0 时对 metrics 的整图距离变换按该间隔（秒）节流，<=0 每次都评估
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name_ + ".metrics_min_interval", rclcpp::ParameterValue(1.0));
+        node_->get_parameter(name_ + ".metrics_min_interval", metrics_min_interval_);
 
         //RCLCPP_INFO(node_->get_logger(), "自定义A*规划器配置完成");
     }
@@ -72,17 +78,37 @@ namespace my_nav2_planner {
                     std::chrono::duration<double, std::milli>(
                         planning_end_time - total_start_time).count();
 
-                const auto metrics_start_time = std::chrono::steady_clock::now();
+                // 整图距离变换按间隔节流：间隔内复用上次评估跳过重建，
+                // 用 min_lethal=-1 标记本次未评估
+                bool evaluate_distance = metrics_min_interval_ <= 0.0;
+                if (!evaluate_distance) {
+                    
+                    const rclcpp::Time now = node_->now();
+                    evaluate_distance =
+                        last_metrics_eval_time_.nanoseconds() == 0 ||
+                        (now - last_metrics_eval_time_).seconds() >=
+                            metrics_min_interval_;
+                }
+
                 my_planning_metrics::ObstacleDistanceField distance_field;
-                const bool distance_ready =
-                    !path.poses.empty() && distance_field.build(costmap_);
+                bool distance_ready = false;
+                double metrics_eval_ms = 0.0;
+                if (evaluate_distance && !path.poses.empty()) {
+                    
+                    const auto metrics_start_time = std::chrono::steady_clock::now();
+                    distance_ready = distance_field.build(costmap_);
+                    metrics_eval_ms =
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - metrics_start_time).count();
+                    if (distance_ready) {
+                        
+                        last_metrics_eval_time_ = node_->now();
+                    }
+                }
                 const my_planning_metrics::PathMetrics path_metrics =
                     my_planning_metrics::evaluatePath(
                         path,
                         distance_ready ? &distance_field : nullptr);
-                const double metrics_eval_ms =
-                    std::chrono::duration<double, std::milli>(
-                        std::chrono::steady_clock::now() - metrics_start_time).count();
 
                 RCLCPP_INFO(
                     node_->get_logger(),
@@ -101,150 +127,84 @@ namespace my_nav2_planner {
                     path_metrics.point_count,
                     path_metrics.length_m,
                     path_metrics.max_curvature_inv_m,
-                    path_metrics.min_lethal_obstacle_distance_m);
+                    distance_ready ?
+                        path_metrics.min_lethal_obstacle_distance_m : -1.0);
             };
 
         nav_msgs::msg::Path global_path;
         global_path.header.frame_id = global_frame_;
         global_path.header.stamp = node_->now();
 
-        // 坐标转换
+        // 坐标转换；出图按 nav2_core 契约抛异常
         unsigned int mx_start, my_start, mx_goal, my_goal;
-        if (!costmap_->worldToMap(start.pose.position.x, start.pose.position.y, mx_start, my_start) ||
-            !costmap_->worldToMap(goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal)) {
+        const bool start_in_map = costmap_->worldToMap(
+            start.pose.position.x, start.pose.position.y, mx_start, my_start);
+        const bool goal_in_map = costmap_->worldToMap(
+            goal.pose.position.x, goal.pose.position.y, mx_goal, my_goal);
+        if (!start_in_map || !goal_in_map) {
 
             RCLCPP_ERROR(node_->get_logger(), "Start or Goal is outside of costmap bounds");
             logMetrics(false, 0.0, 0, 0, 0, global_path);
-            return global_path;
+            if (!start_in_map) {
+                throw nav2_core::PlannerException("Start is outside of costmap bounds");
+            }
+            throw nav2_core::PlannerException("Goal is outside of costmap bounds");
         }
 
-        // 路径规划
-        int width = costmap_->getSizeInCellsX(),
-            height = costmap_->getSizeInCellsY();
-        int map_size = width * height;
-        std::vector<double> g_values(map_size, std::numeric_limits<double>::max()); // 从起点到每个节点的实际代价
-        std::vector<int> parent_map(map_size, -1); // 记录每个节点的父节点索引，便于回溯路径
+        // start 落在硬障碍内保持宽容：警告后继续规划（常见于贴墙起步）
+        if (isBlockedCell(*costmap_, static_cast<int>(mx_start), static_cast<int>(my_start))) {
 
-        typedef std::pair<double, int> Node; // A*算法中的节点，包含f值（g+h）和节点索引
-        std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open_list; // A*算法的优先队列，按照f值（g+h）排序
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "Start cell is inside a lethal/inscribed obstacle, planning anyway");
+        }
 
-        int start_idx = my_start * width + mx_start,
-            goal_idx = my_goal * width + mx_goal;
-
-        g_values[start_idx] = 0.0;
-        open_list.push({0.0, start_idx});
-
-        bool found_path = false;
-        std::vector<bool> discovered(static_cast<std::size_t>(map_size), false);
-        discovered[start_idx] = true;
-        std::size_t expanded_nodes = 0;
-        std::size_t generated_nodes = 1;
-        std::size_t open_peak = 1;
-
+        // 栅格搜索；goal 占据等域错误由 searchCells 抛出
+        // Humble planner_server 的 createPlan 没有 cancel_checker，单元测试可直接测 searchCells
         const auto search_start_time = std::chrono::steady_clock::now();
-        while (!open_list.empty()) {
-
-            int cur_idx = open_list.top().second;
-            open_list.pop();
-            ++expanded_nodes;
-
-            if (cur_idx == goal_idx) {
-
-                found_path = true;
-                break;
-            }
-
-            int cx = cur_idx % width,
-                cy = cur_idx / width;
-
-            for (int dx = -1; dx <= 1; ++ dx) {
-
-                for (int dy = -1; dy <= 1; ++ dy) {
-
-                    if (dx == 0 && dy == 0) continue;
-                    int nx = cx + dx,
-                        ny = cy + dy;
-                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-
-                    int next_idx = ny * width + nx;
-                    unsigned char cost = costmap_->getCost(nx, ny);
-
-                    // 超过阈值（默认 inscribed/lethal）视为硬障碍。
-                    // 低于阈值的膨胀代价进入 g，未知区域按开关决定是否加罚。
-                    if (cost >= cost_threshold_ &&
-                        cost != nav2_costmap_2d::NO_INFORMATION)
-                        continue;
-
-                    double extra_cost = 0.0;
-                    if (cost == nav2_costmap_2d::NO_INFORMATION) {
-                        if (!treat_unknown_as_free_)
-                            extra_cost = unknown_cost_;
-                    } else {
-                        extra_cost = obstacle_cost_weight_ *
-                            static_cast<double>(cost) /
-                            static_cast<double>(
-                                nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
-                    }
-
-                    double step_cost = std::sqrt(dx * dx + dy * dy);
-                    double tentative_g = g_values[cur_idx] + step_cost + extra_cost;
-
-                    if (tentative_g < g_values[next_idx]) {
-
-                        if (!discovered[next_idx]) {
-                            discovered[next_idx] = true;
-                            ++generated_nodes;
-                        }
-                        g_values[next_idx] = tentative_g;
-                        parent_map[next_idx] = cur_idx;
-
-                        double h_cost = std::sqrt(std::pow(nx - (int)mx_goal, 2) +
-                                        std::pow(ny - (int)my_goal, 2));
-                        open_list.push({tentative_g + h_cost, next_idx});
-                        open_peak = std::max(open_peak, open_list.size());
-                    }
-                }
-            }
+        AStarSearchResult search;
+        try {
+            search = searchCells(
+                *costmap_, mx_start, my_start, mx_goal, my_goal, {});
+        } catch (const nav2_core::PlannerException & ex) {
+            RCLCPP_WARN(node_->get_logger(), "A* planning failed: %s", ex.what());
+            logMetrics(false, 0.0, 0, 0, 0, global_path);
+            throw;
         }
         const auto search_end_time = std::chrono::steady_clock::now();
         const double search_ms =
             std::chrono::duration<double, std::milli>(
                 search_end_time - search_start_time).count();
 
-        if (found_path) {
+        if (!search.found) {
 
-            std::vector<int> path_;
-            int curr_idx = goal_idx;
-            while (curr_idx != -1) {
-
-                path_.push_back(curr_idx);
-                curr_idx = parent_map[curr_idx];
-            }
-            std::reverse(path_.begin(), path_.end());
-
-            for (int idx : path_) {
-
-                geometry_msgs::msg::PoseStamped pose;
-                pose.header.frame_id = global_frame_;
-                pose.header.stamp = node_->now();
-
-                unsigned int mx = idx % width,
-                    my = idx / width;
-                double wx, wy;
-                costmap_->mapToWorld(mx, my, wx, wy);
-
-                pose.pose.position.x = wx;
-                pose.pose.position.y = wy;
-                pose.pose.orientation = goal.pose.orientation;
-                global_path.poses.push_back(pose);
-            }
-        } else {
-
-            global_path.poses.clear();
             RCLCPP_WARN(node_->get_logger(), "A* failed to find a path from start to goal");
+            logMetrics(false, search_ms, search.expanded_nodes,
+                search.generated_nodes, search.open_peak, global_path);
+            throw nav2_core::PlannerException(
+                "A* failed to find a path from start to goal");
         }
 
-        if (found_path && !global_path.poses.empty() && replan_event_pub_) {
+        // 遍历搜索结果，将路径点转换为 PoseStamped 并添加到 global_path 中
+        const int width = static_cast<int>(costmap_->getSizeInCellsX());
+        for (const std::uint64_t idx : search.cells) {
+
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header.frame_id = global_frame_;
+            pose.header.stamp = node_->now();
+
+            const unsigned int mx = static_cast<unsigned int>(idx % width);
+            const unsigned int my = static_cast<unsigned int>(idx / width);
+            double wx, wy;
+            costmap_->mapToWorld(mx, my, wx, wy);
+
+            pose.pose.position.x = wx;
+            pose.pose.position.y = wy;
+            pose.pose.orientation = goal.pose.orientation;
+            global_path.poses.push_back(pose);
+        }
+
+        if (replan_event_pub_) {
             rm_interfaces::msg::ReplanEvent event;
             event.header.stamp = node_->now();
             event.header.frame_id = global_frame_;
@@ -262,13 +222,162 @@ namespace my_nav2_planner {
         }
 
         logMetrics(
-            found_path,
+            true,
             search_ms,
-            expanded_nodes,
-            generated_nodes,
-            open_peak,
+            search.expanded_nodes,
+            search.generated_nodes,
+            search.open_peak,
             global_path);
         return global_path;
+    }
+
+    bool MyAStarPlanner::isBlockedCell(
+        const nav2_costmap_2d::Costmap2D & costmap, int cx, int cy) const {
+
+        if (cx < 0 || cy < 0 ||
+            cx >= static_cast<int>(costmap.getSizeInCellsX()) ||
+            cy >= static_cast<int>(costmap.getSizeInCellsY())) {
+            return true;
+        }
+        const unsigned char cost = costmap.getCost(
+            static_cast<unsigned int>(cx), static_cast<unsigned int>(cy));
+        return cost >= cost_threshold_ &&
+               cost != nav2_costmap_2d::NO_INFORMATION;
+    }
+
+    MyAStarPlanner::AStarSearchResult MyAStarPlanner::searchCells(
+        const nav2_costmap_2d::Costmap2D & costmap,
+        unsigned int start_x, unsigned int start_y,
+        unsigned int goal_x, unsigned int goal_y,
+        const std::function<bool()> & cancel_checker) {
+
+        AStarSearchResult result;
+        const int width = static_cast<int>(costmap.getSizeInCellsX());
+        const int height = static_cast<int>(costmap.getSizeInCellsY());
+        if (width <= 0 || height <= 0 ||
+            start_x >= static_cast<unsigned int>(width) ||
+            start_y >= static_cast<unsigned int>(height) ||
+            goal_x >= static_cast<unsigned int>(width) ||
+            goal_y >= static_cast<unsigned int>(height)) {
+            return result;
+        }
+
+        const int start_idx = static_cast<int>(start_y) * width + static_cast<int>(start_x);
+        const int goal_idx = static_cast<int>(goal_y) * width + static_cast<int>(goal_x);
+
+        // goal 落在硬障碍内时提前退出；goal==start 保留原单点成功行为
+        if (start_idx != goal_idx &&
+            isBlockedCell(costmap, static_cast<int>(goal_x), static_cast<int>(goal_y))) {
+            throw nav2_core::PlannerException("Goal cell is inside a lethal/inscribed obstacle");
+        }
+
+        constexpr double kInfinityCost = std::numeric_limits<double>::max();
+        std::vector<double> g_values(static_cast<std::size_t>(width) * height, kInfinityCost);
+        std::vector<int> parent_map(static_cast<std::size_t>(width) * height, -1);
+
+        typedef std::pair<double, int> Node; // A*算法中的节点，包含f值（g+h）和节点索引
+        std::priority_queue<Node, std::vector<Node>, std::greater<Node>> open_list;
+
+        g_values[start_idx] = 0.0;
+        open_list.push({0.0, start_idx});
+
+        std::vector<bool> discovered(g_values.size(), false);
+        discovered[start_idx] = true;
+
+        constexpr std::size_t kCancelCheckInterval = 1024;
+        while (!open_list.empty()) {
+
+            const int cur_idx = open_list.top().second;
+            open_list.pop();
+            ++result.expanded_nodes;
+
+            if (cancel_checker &&
+                result.expanded_nodes % kCancelCheckInterval == 0U &&
+                cancel_checker()) {
+                if (node_) {
+                    RCLCPP_WARN(node_->get_logger(), "A* planning cancelled");
+                }
+                return result;
+            }
+
+            if (cur_idx == goal_idx) {
+                result.found = true;
+                break;
+            }
+
+            const int cx = cur_idx % width,
+                      cy = cur_idx / width;
+
+            for (int dx = -1; dx <= 1; ++ dx) {
+
+                for (int dy = -1; dy <= 1; ++ dy) {
+
+                    if (dx == 0 && dy == 0) continue;
+                    const int nx = cx + dx,
+                              ny = cy + dy;
+                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+
+                    // 防对角穿角：斜向移动要求两个正交邻格都不是硬障碍
+                    if (dx != 0 && dy != 0 &&
+                        (isBlockedCell(costmap, cx + dx, cy) ||
+                         isBlockedCell(costmap, cx, cy + dy))) {
+                        continue;
+                    }
+
+                    const int next_idx = ny * width + nx;
+                    const unsigned char cost = costmap.getCost(
+                        static_cast<unsigned int>(nx), static_cast<unsigned int>(ny));
+
+                    // 超过阈值（默认 inscribed/lethal）视为硬障碍。
+                    // 低于阈值的膨胀代价进入 g，未知区域按开关决定是否加罚。
+                    double extra_cost = 0.0;
+                    if (cost == nav2_costmap_2d::NO_INFORMATION) {
+                        if (!treat_unknown_as_free_) {
+                            extra_cost = unknown_cost_;
+                        }
+                    } else if (cost >= cost_threshold_) {
+                        continue;
+                    } else {
+                        extra_cost = obstacle_cost_weight_ *
+                            static_cast<double>(cost) /
+                            static_cast<double>(
+                                nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);
+                    }
+
+                    const double step_cost = std::sqrt(dx * dx + dy * dy);
+                    const double tentative_g =
+                        g_values[cur_idx] + step_cost + extra_cost;
+
+                    if (tentative_g < g_values[next_idx]) {
+
+                        if (!discovered[next_idx]) {
+                            discovered[next_idx] = true;
+                            ++result.generated_nodes;
+                        }
+                        g_values[next_idx] = tentative_g;
+                        parent_map[next_idx] = cur_idx;
+
+                        const double h_cost = std::sqrt(std::pow(nx - static_cast<int>(goal_x), 2) +
+                                        std::pow(ny - static_cast<int>(goal_y), 2));
+                        open_list.push({tentative_g + h_cost, next_idx});
+                        result.open_peak = std::max(result.open_peak, open_list.size());
+                    }
+                }
+            }
+        }
+
+        if (!result.found) {
+            return result;
+        }
+
+        // 回溯路径（含起终点）
+        int curr_idx = goal_idx;
+        while (curr_idx != -1) {
+            result.cells.push_back(static_cast<std::uint64_t>(curr_idx));
+            curr_idx = parent_map[curr_idx];
+        }
+        std::reverse(result.cells.begin(), result.cells.end());
+        return result;
     }
 }// namespace my_nav2_planner
 

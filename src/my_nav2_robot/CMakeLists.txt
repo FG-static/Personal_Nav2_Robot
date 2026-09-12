@@ -158,6 +158,7 @@ install(PROGRAMS
   scripts/generate_truth_map.py
   scripts/ground_truth_odom_relay.py
   scripts/map_keepalive.py
+  scripts/check_mid360_net.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -54,6 +54,8 @@ namespace my_bspline_smoother {
             max_mx = 0,
             min_my = 0,
             max_my = 0;
+        // seed 不可用（占用/出图/无图）时为 false，表示该段没有可信走廊
+        bool valid = true;
     };
 
     struct CorridorViolation {
@@ -278,10 +280,16 @@ namespace my_bspline_smoother {
             corridor_collision_check_resolution_ = 0.03,
             corridor_marker_z_ = 0.02;
         int max_overshoot_constraints_per_iter_ = 20;
+        // 走廊/超调违规判定容差（米）：需大于 OSQP 求解残差，避免把求解器
+        // 的原始残差误报为约束违规
+        double corridor_violation_tolerance_ = 1e-4;
         bool visualize_corridor_boxes_ = true;
         bool allow_unknown_ = true;
         unsigned char corridor_lethal_cost_threshold_ =
             nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
+        // metrics 中整图距离变换的最小复评间隔（秒）：>0 节流，<=0 每次都评估
+        double metrics_min_interval_ = 1.0;
+        rclcpp::Time last_metrics_eval_time_{0, 0, RCL_ROS_TIME};
         BSplineSolveStats last_solve_stats_;
 
         const double Q_data[4][4] = {

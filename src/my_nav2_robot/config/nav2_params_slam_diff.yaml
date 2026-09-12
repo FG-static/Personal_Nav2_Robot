@@ -532,6 +532,8 @@ planner_server:
       interpolation_resolution: 0.1
       cost_threshold: 253 # 硬障碍：inscribed/lethal；膨胀区靠 obstacle_cost_weight
       obstacle_cost_weight: 6.0
+      # metrics 整图距离变换最小复评间隔（秒）：>0 节流，<=0 每次评估
+      metrics_min_interval: 1.0
     RRTStar:
       plugin: "my_rrtstar_planner/MyRRTStarPlanner"
       step_size: 0.25
@@ -594,6 +596,11 @@ smoother_server:
       allow_unknown: true
       corridor_marker_z: 0.02
       max_overshoot_constraints_per_iter: 20
+      # 走廊/超调违规判定容差（米）：须大于 OSQP 求解残差，避免把求解器
+      # 残差误报为 "constraints remain violated"
+      corridor_violation_tolerance: 1.0e-4
+      # metrics 整图距离变换最小复评间隔（秒）：>0 节流，<=0 每次评估
+      metrics_min_interval: 1.0
     esdf_g2o_smoother:
       plugin: "my_nav2_smoother/EsdfG2oSmoother"
       resample_resolution: 0.10

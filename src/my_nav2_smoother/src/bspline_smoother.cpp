@@ -119,6 +119,11 @@ namespace my_bspline_smoother {
         nav2_util::declare_parameter_if_not_declared(node_, name + ".corridor_marker_z", rclcpp::ParameterValue(0.02));
         nav2_util::declare_parameter_if_not_declared(
             node_, name + ".max_overshoot_constraints_per_iter", rclcpp::ParameterValue(20));
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name + ".corridor_violation_tolerance", rclcpp::ParameterValue(1e-4));
+        // >0 时对 metrics 的整图距离变换按该间隔（秒）节流，<=0 每次都评估
+        nav2_util::declare_parameter_if_not_declared(
+            node_, name + ".metrics_min_interval", rclcpp::ParameterValue(1.0));
 
         node_->get_parameter(name + ".w_smooth", w_smooth_);
         node_->get_parameter(name + ".w_guide", w_guide_);
@@ -138,6 +143,11 @@ namespace my_bspline_smoother {
         node_->get_parameter(name + ".allow_unknown", allow_unknown_);
         node_->get_parameter(name + ".corridor_marker_z", corridor_marker_z_);
         node_->get_parameter(name + ".max_overshoot_constraints_per_iter", max_overshoot_constraints_per_iter_);
+        node_->get_parameter(name + ".corridor_violation_tolerance", corridor_violation_tolerance_);
+        if (corridor_violation_tolerance_ < 0.0) {
+            corridor_violation_tolerance_ = 1e-4;
+        }
+        node_->get_parameter(name + ".metrics_min_interval", metrics_min_interval_);
 
         corridor_marker_pub_ =
             node_->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -215,11 +225,27 @@ namespace my_bspline_smoother {
                     std::chrono::duration<double, std::milli>(
                         smoothing_end_time - total_start_time).count();
 
+                // 整图距离变换按间隔节流：间隔内复用上次评估跳过重建，
+                // 用 min_lethal=-1 标记本次未评估
+                bool evaluate_distance = metrics_min_interval_ <= 0.0;
+                if (!evaluate_distance) {
+                    const rclcpp::Time now = node_->now();
+                    evaluate_distance =
+                        last_metrics_eval_time_.nanoseconds() == 0 ||
+                        (now - last_metrics_eval_time_).seconds() >=
+                            metrics_min_interval_;
+                }
+
                 const auto metrics_start_time = std::chrono::steady_clock::now();
                 const auto costmap = getActiveCostmap();
                 my_planning_metrics::ObstacleDistanceField distance_field;
-                const bool distance_ready =
-                    costmap != nullptr && distance_field.build(costmap.get());
+                bool distance_ready = false;
+                if (evaluate_distance && costmap != nullptr) {
+                    distance_ready = distance_field.build(costmap.get());
+                    if (distance_ready) {
+                        last_metrics_eval_time_ = node_->now();
+                    }
+                }
                 const auto *field = distance_ready ? &distance_field : nullptr;
                 const my_planning_metrics::PathMetrics input_metrics =
                     my_planning_metrics::evaluatePath(input_path, field);
@@ -254,8 +280,8 @@ namespace my_bspline_smoother {
                     output_metrics.length_m,
                     input_metrics.max_curvature_inv_m,
                     output_metrics.max_curvature_inv_m,
-                    input_metrics.min_lethal_obstacle_distance_m,
-                    output_metrics.min_lethal_obstacle_distance_m,
+                    distance_ready ? input_metrics.min_lethal_obstacle_distance_m : -1.0,
+                    distance_ready ? output_metrics.min_lethal_obstacle_distance_m : -1.0,
                     last_solve_stats_.max_vel,
                     last_solve_stats_.max_acc,
                     last_solve_stats_.max_jerk,
@@ -310,11 +336,14 @@ namespace my_bspline_smoother {
             solveBSplineQP(ref_path_x, ref_path_y, w_smooth_, w_guide_, smooth_path_x, smooth_path_y);
         if (!solved) {
 
+            // QP 失败时回退原始路径并按成功处理：原始路径本身是合法的
+            // A* 路径，返回失败会触发 BT 的 ClearEntireCostmap 恢复分支，
+            // 对几何上有效的路径是无谓的代价（对齐 EsdfG2oSmoother 行为）
             RCLCPP_WARN(
                 node_->get_logger(),
                 "B-Spline smoothing failed, falling back to raw path");
             path = raw_path;
-            return false;
+            return true;
         }
 
         if (smooth_path_x.size() != smooth_path_y.size() ||
@@ -589,7 +618,7 @@ namespace my_bspline_smoother {
                 violation = std::max(violation, dy);
             }
 
-            if (violation > 1e-6) {
+            if (violation > corridor_violation_tolerance_) {
 
                 report.ok = false;
                 report.point_vios.push_back({i, dx, dy, violation});
@@ -857,11 +886,14 @@ namespace my_bspline_smoother {
             if (!worldToMap(p_ref_x[seed_index], p_ref_y[seed_index], mx, my) ||
                 !isCellFree(static_cast<int>(mx), static_cast<int>(my))) {
 
+                // seed 不可用（占用/出图）：标记为无效段，后续跳过该段的
+                // 超调检查与约束，避免把样条约束进障碍格导致 QP 不可行
                 boxes.push_back(GridBox{
                     static_cast<int>(mx),
                     static_cast<int>(mx),
                     static_cast<int>(my),
-                    static_cast<int>(my)
+                    static_cast<int>(my),
+                    false
                 });
                 continue;
             }
@@ -1133,6 +1165,10 @@ namespace my_bspline_smoother {
             candidates.insert(candidates.end(), y_extrema.begin(), y_extrema.end());
 
             const GridBox box = segment_boxes[seg];
+            if (!box.valid) {
+                // seed 不可用的段没有可信走廊，跳过检查也不产生超调记录
+                continue;
+            }
 
             double min_x = 0.0;
             double min_y = 0.0;
@@ -1172,7 +1208,8 @@ namespace my_bspline_smoother {
                 else if (point.y() > upper_y)
                     dy = point.y() - upper_y;
 
-                if (std::abs(dx) > 1e-6 || std::abs(dy) > 1e-6) {
+                if (std::abs(dx) > corridor_violation_tolerance_ ||
+                    std::abs(dy) > corridor_violation_tolerance_) {
 
                     report.ok = false;
                     report.overshoots.push_back({
@@ -1311,6 +1348,10 @@ namespace my_bspline_smoother {
                 continue;
 
             const GridBox &box = segment_boxes[overshoot.segment_index];
+            if (!box.valid) {
+                // 无效段没有可信走廊，不追加约束（避免约束进障碍格）
+                continue;
+            }
 
             double min_x = 0.0;
             double min_y = 0.0;
@@ -1592,36 +1633,68 @@ namespace my_bspline_smoother {
         osqp_set_default_settings(settings);
         settings->warm_start = 1;
         settings->verbose = 0; // 生产环境关闭日志
+        // 求解精度与走廊检查容差匹配：polishing 可将原始残差压到远低于
+        // corridor_violation_tolerance_，避免求解器残差被误判为约束违规
+        settings->eps_abs = 1e-6;
+        settings->eps_rel = 1e-6;
+        settings->polish = 1;
+        settings->max_iter = 8000;
 
         OSQPWorkspace *work = nullptr;
         c_int status = osqp_setup(&work, data, settings);
         bool success = false;
         if (status == 0 && work) {
 
+            const auto solutionUsable = [](const OSQPWorkspace *w) {
+                return w->info &&
+                       (w->info->status_val == OSQP_SOLVED ||
+                        w->info->status_val == OSQP_SOLVED_INACCURATE) &&
+                       w->solution && w->solution->x;
+            };
+
+            bool x_ok = false;
             osqp_solve(work);
             if (work->info)
                 last_solve_stats_.osqp_iterations += static_cast<int>(work->info->iter);
-            if (work->info->status_val >= 0 && work->solution) {
+            if (solutionUsable(work)) {
 
                 p_smooth_x.resize(n);
                 for (int i = 0; i < n; ++ i) {
 
                     p_smooth_x[i] = work->solution->x[i];
                 }
+                x_ok = true;
+            } else {
+
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "B-Spline: OSQP x 求解失败 status=%d",
+                    static_cast<int>(work->info ? work->info->status_val : -100));
             }
-            osqp_update_lin_cost(work, f_y.data());
-            osqp_update_bounds(work, l_y.data(), u_y.data());
-            osqp_solve(work);
-            if (work->info)
-                last_solve_stats_.osqp_iterations += static_cast<int>(work->info->iter);
-            if (work->info->status_val >= 0 && work->solution) {
 
-                p_smooth_y.resize(n);
-                for (int i = 0; i < n; ++ i) {
+            // x 分量求解失败时跳过 y 求解，避免与旧值拼出不自洽的输出
+            if (x_ok) {
 
-                    p_smooth_y[i] = work->solution->x[i];
+                osqp_update_lin_cost(work, f_y.data());
+                osqp_update_bounds(work, l_y.data(), u_y.data());
+                osqp_solve(work);
+                if (work->info)
+                    last_solve_stats_.osqp_iterations += static_cast<int>(work->info->iter);
+                if (solutionUsable(work)) {
+
+                    p_smooth_y.resize(n);
+                    for (int i = 0; i < n; ++ i) {
+
+                        p_smooth_y[i] = work->solution->x[i];
+                    }
+                    success = true;
+                } else {
+
+                    RCLCPP_INFO(
+                        node_->get_logger(),
+                        "B-Spline: OSQP y 求解失败 status=%d",
+                        static_cast<int>(work->info ? work->info->status_val : -100));
                 }
-                success = true;
             }
         } else {
 
