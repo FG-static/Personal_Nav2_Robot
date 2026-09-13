@@ -5,8 +5,8 @@
 #define RM_SERIAL_DRIVER__PACKET_HPP_
 
 #include <algorithm>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace rm_serial_driver

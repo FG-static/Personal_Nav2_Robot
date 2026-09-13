@@ -1,3 +1,6 @@
+// Copyright (c) 2022 ChenJun
+// Licensed under the Apache-2.0 License.
+
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -9,11 +12,11 @@
 
 using rm_serial_driver::FRAME_HEADER;
 using rm_serial_driver::FRAME_TAIL;
-using rm_serial_driver::RX_FRAME_LEN;
-using rm_serial_driver::TX_FRAME_LEN;
 using rm_serial_driver::ReceiveFrame;
+using rm_serial_driver::RX_FRAME_LEN;
 using rm_serial_driver::SendFrame;
 using rm_serial_driver::toVector;
+using rm_serial_driver::TX_FRAME_LEN;
 
 TEST(SerialPacket, ReceiveFrameMatchesMcuTxLayout)
 {
