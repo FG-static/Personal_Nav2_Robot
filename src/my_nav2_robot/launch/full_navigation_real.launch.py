@@ -29,7 +29,8 @@ def generate_launch_description():
     this launch's Nav2 stack consumes (odom_topic is rewritten accordingly).
 
     tunnel:=true additionally starts the my_tunnel_guidance auto inspection
-    node (allow_capture_done waits for the MCU capture_done handshake).
+    node (allow_capture_done waits for MCU capture_done, then wait_for_vision
+    commands the vision capture node).
 
     Not started here: gzserver/gzclient, Mid360 Gazebo plugin, simulated IMU,
     and ground-truth odom.
@@ -45,6 +46,7 @@ def generate_launch_description():
     run_serial = LaunchConfiguration('serial')
     run_tunnel = LaunchConfiguration('tunnel')
     allow_capture_done = LaunchConfiguration('allow_capture_done')
+    wait_for_vision = LaunchConfiguration('wait_for_vision')
     chassis = LaunchConfiguration('chassis')
     start_livox = LaunchConfiguration('start_livox')
     start_scan = LaunchConfiguration('start_scan')
@@ -174,6 +176,8 @@ def generate_launch_description():
                 'use_sim_time': ParameterValue(use_sim_time, value_type=bool),
                 'allow_capture_done': ParameterValue(
                     allow_capture_done, value_type=bool),
+                'wait_for_vision': ParameterValue(
+                    wait_for_vision, value_type=bool),
             },
         ],
     )
@@ -228,7 +232,14 @@ def generate_launch_description():
             default_value='true',
             description=(
                 'When tunnel:=true, wait for the MCU capture_done handshake '
-                'before the next goal. Keep true on the real robot.')),
+                'before commanding vision. Keep true on the real robot.')),
+        DeclareLaunchArgument(
+            'wait_for_vision',
+            default_value='true',
+            description=(
+                'When tunnel:=true, after MCU capture_done publish 0x01 on '
+                '/vision_capture_cmd and wait for 0x02 on /vision_capture_status. '
+                'Keep true on the real robot.')),
         hardware,
         static_map_to_odom,
         map_keepalive,

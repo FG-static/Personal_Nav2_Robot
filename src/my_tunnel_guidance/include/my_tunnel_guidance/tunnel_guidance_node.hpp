@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <sys/types.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2_ros/buffer.h>
@@ -25,6 +26,7 @@
 #include "my_tunnel_guidance/tunnel_geometry_estimator.hpp"
 #include "my_tunnel_guidance/tunnel_guidance_search.hpp"
 #include "my_tunnel_guidance/inspection_dataset_recorder.hpp"
+#include "my_tunnel_guidance/vision_capture_handshake.hpp"
 #include "my_tunnel_guidance/tunnel_types.hpp"
 
 namespace my_tunnel_guidance {
@@ -86,9 +88,15 @@ private:
         const GoalHandleNavigateToPose::WrappedResult & result,
         uint8_t seq);
     void onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg);
+    void onVisionCaptureStatus(const std_msgs::msg::UInt8::SharedPtr msg);
     void setCaptureEnable(bool enable);
+    void publishVisionCaptureCommand();
+    void beginVisionCapture();
+    void finishCaptureAndHold();
     void resetInspectionHandshake();
     void publishHandshakeFlags();
+    bool mcuCaptureComplete() const;
+    bool visionCaptureComplete() const;
     bool inspectionCanDepart() const;
     bool lookupMapPose(
         const rclcpp::Time & stamp,
@@ -130,10 +138,13 @@ private:
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr valid_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr exit_detected_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr capture_enable_pub_;
+    rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr vision_capture_cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr dataset_ready_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr can_depart_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr merged_map_pub_;
     rclcpp::Subscription<rm_interfaces::msg::Gimbal>::SharedPtr gimbal_sub_;
+    rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr vision_capture_status_sub_;
+    rclcpp::TimerBase::SharedPtr vision_cmd_timer_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr left_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr right_points_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_points_pub_;
@@ -192,12 +203,19 @@ private:
     bool mcu_capture_done_ = false;
     // true: wait for MCU capture_done. false: skip handshake (sim).
     bool allow_capture_done_ = false;
+    bool wait_for_vision_ = false;
+    std::string vision_capture_cmd_topic_;
+    std::string vision_capture_status_topic_;
+    double vision_cmd_hz_ = 20.0;
     bool enable_dataset_recording_ = true;
     bool wait_for_dataset_ = true;
     std::string dataset_output_dir_;
     double dataset_voxel_size_ = 0.03;
+    bool waiting_for_mcu_ = false;
+    bool waiting_for_vision_ = false;
     bool waiting_to_depart_ = false;
     bool dataset_ready_ = true;
+    VisionCaptureHandshake vision_handshake_;
     InspectionDatasetRecorder dataset_recorder_;
     geometry_msgs::msg::PoseStamped latest_auto_goal_;
     geometry_msgs::msg::PoseStamped last_sent_auto_goal_;

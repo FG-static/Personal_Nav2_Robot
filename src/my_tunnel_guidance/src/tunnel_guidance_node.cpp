@@ -109,6 +109,12 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     min_goal_send_interval_ = declare_parameter("min_goal_send_interval", 1.0);
     auto_goal_dwell_time_ = declare_parameter("auto_goal_dwell_time", 1.0);
     allow_capture_done_ = declare_parameter("allow_capture_done", false);
+    wait_for_vision_ = declare_parameter("wait_for_vision", false);
+    vision_capture_cmd_topic_ = declare_parameter(
+        "vision_capture_cmd_topic", std::string("/vision_capture_cmd"));
+    vision_capture_status_topic_ = declare_parameter(
+        "vision_capture_status_topic", std::string("/vision_capture_status"));
+    vision_cmd_hz_ = declare_parameter("vision_cmd_hz", 20.0);
     enable_dataset_recording_ = declare_parameter("enable_dataset_recording", true);
     wait_for_dataset_ = declare_parameter("wait_for_dataset", true);
     dataset_output_dir_ = declare_parameter(
@@ -153,6 +159,8 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
         "~/exit_detected", rclcpp::QoS(1).reliable().transient_local());
     capture_enable_pub_ = create_publisher<std_msgs::msg::Bool>(
         "/capture_enable", rclcpp::QoS(1).reliable().transient_local());
+    vision_capture_cmd_pub_ = create_publisher<std_msgs::msg::UInt8>(
+        vision_capture_cmd_topic_, rclcpp::QoS(1).reliable());
     dataset_ready_pub_ = create_publisher<std_msgs::msg::Bool>(
         "~/dataset_ready", rclcpp::QoS(1).reliable().transient_local());
     can_depart_pub_ = create_publisher<std_msgs::msg::Bool>(
@@ -162,6 +170,11 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
     gimbal_sub_ = create_subscription<rm_interfaces::msg::Gimbal>(
         "/tracker/gimbal", rclcpp::QoS(10),
         std::bind(&TunnelGuidanceNode::onGimbal, this, std::placeholders::_1));
+    vision_capture_status_sub_ = create_subscription<std_msgs::msg::UInt8>(
+        vision_capture_status_topic_, rclcpp::QoS(1).reliable(),
+        std::bind(
+            &TunnelGuidanceNode::onVisionCaptureStatus, this,
+            std::placeholders::_1));
     left_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
         "~/left_points", rclcpp::SensorDataQoS());
     right_points_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -186,6 +199,13 @@ TunnelGuidanceNode::TunnelGuidanceNode(const rclcpp::NodeOptions & options)
         enable_dataset_recording_ = false;
     }
     publishHandshakeFlags();
+    publishVisionCaptureCommand();
+    if (vision_cmd_hz_ > 0.0) {
+        const auto period = std::chrono::duration<double>(1.0 / vision_cmd_hz_);
+        vision_cmd_timer_ = create_wall_timer(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+            std::bind(&TunnelGuidanceNode::publishVisionCaptureCommand, this));
+    }
 
     if (enable_auto_goal_) {
 
@@ -899,14 +919,44 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
             return;
         }
-        setCaptureEnable(false);
         auto_goal_dwelling_ = false;
-        waiting_to_depart_ = true;
-        finishInspectionDataset(now);
+        waiting_for_mcu_ = true;
         RCLCPP_INFO(
             get_logger(),
-            "Auto goal dwell finished, capture_enable=false, waiting for MCU "
-            "capture_done and local dataset_ready");
+            "Auto goal dwell finished, capture_enable still true, waiting for MCU capture_done");
+    }
+
+    if (waiting_for_mcu_) {
+
+        if (!mcuCaptureComplete()) {
+
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), mutable_clock(*this), 2000,
+                "Waiting for MCU capture_done before vision capture");
+            return;
+        }
+        waiting_for_mcu_ = false;
+        if (wait_for_vision_) {
+
+            beginVisionCapture();
+            return;
+        }
+        finishCaptureAndHold();
+        return;
+    }
+
+    if (waiting_for_vision_) {
+
+        if (!vision_handshake_.captureFinished()) {
+
+            RCLCPP_INFO_THROTTLE(
+                get_logger(), mutable_clock(*this), 2000,
+                "Waiting for vision capture: cmd=0x%02X status=0x%02X saw_capturing=%d",
+                vision_handshake_.command(), vision_handshake_.status(),
+                static_cast<int>(vision_handshake_.sawCapturing()));
+            return;
+        }
+        finishCaptureAndHold();
         return;
     }
 
@@ -916,17 +966,21 @@ void TunnelGuidanceNode::maybeSendAutoGoal() {
 
             RCLCPP_INFO_THROTTLE(
                 get_logger(), mutable_clock(*this), 2000,
-                "Waiting to depart: mcu_done=%d (need=%d) dataset_ready=%d (need=%d)",
+                "Waiting to depart: mcu=%d (need=%d) vision_waiting=%d (need=%d) "
+                "dataset_ready=%d (need=%d)",
                 static_cast<int>(mcu_capture_done_),
                 static_cast<int>(allow_capture_done_),
+                static_cast<int>(vision_handshake_.waiting()),
+                static_cast<int>(wait_for_vision_),
                 static_cast<int>(dataset_ready_),
                 static_cast<int>(wait_for_dataset_));
             return;
         }
         RCLCPP_INFO(
             get_logger(),
-            "Inspection handshake complete (mcu=%d dataset=%d), requesting next search",
-            static_cast<int>(mcu_capture_done_ || !allow_capture_done_),
+            "Inspection handshake complete (mcu=%d vision=%d dataset=%d), requesting next search",
+            static_cast<int>(mcuCaptureComplete()),
+            static_cast<int>(visionCaptureComplete() || !wait_for_vision_),
             static_cast<int>(dataset_ready_ || !wait_for_dataset_));
         waiting_to_depart_ = false;
         has_sent_auto_goal_ = false;
@@ -1042,14 +1096,18 @@ void TunnelGuidanceNode::autoGoalResultCallback(
 
         case rclcpp_action::ResultCode::SUCCEEDED:
             auto_goal_dwelling_ = true;
+            waiting_for_mcu_ = false;
+            waiting_for_vision_ = false;
             waiting_to_depart_ = false;
             mcu_capture_done_ = false;
+            vision_handshake_.reset();
             dwell_start_time_ = get_clock()->now();
             setCaptureEnable(true);
             startInspectionDataset(dwell_start_time_);
             RCLCPP_INFO(
                 get_logger(),
-                "Auto goal succeeded, capture_enable=true, dwelling for %.1f s",
+                "Auto goal succeeded, capture_enable=true, dwelling for %.1f s "
+                "then MCU/vision handshake",
                 auto_goal_dwell_time_);
             break;
         case rclcpp_action::ResultCode::ABORTED:
@@ -1077,12 +1135,23 @@ void TunnelGuidanceNode::autoGoalResultCallback(
 
 void TunnelGuidanceNode::onGimbal(const rm_interfaces::msg::Gimbal::SharedPtr msg)
 {
-    if ((auto_goal_dwelling_ || waiting_to_depart_) &&
+    if ((auto_goal_dwelling_ || waiting_for_mcu_ || waiting_for_vision_ ||
+            waiting_to_depart_) &&
         msg->capture_done && !mcu_capture_done_)
     {
         mcu_capture_done_ = true;
         RCLCPP_INFO(get_logger(), "Received MCU capture_done=true");
         publishHandshakeFlags();
+    }
+}
+
+void TunnelGuidanceNode::onVisionCaptureStatus(
+    const std_msgs::msg::UInt8::SharedPtr msg)
+{
+    vision_handshake_.onStatus(msg->data);
+    if (waiting_for_vision_ && vision_handshake_.captureFinished()) {
+        RCLCPP_INFO(get_logger(), "Received vision capture_status=0x02");
+        finishCaptureAndHold();
     }
 }
 
@@ -1093,11 +1162,51 @@ void TunnelGuidanceNode::setCaptureEnable(bool enable)
     capture_enable_pub_->publish(msg);
 }
 
+void TunnelGuidanceNode::publishVisionCaptureCommand()
+{
+    std_msgs::msg::UInt8 msg;
+    msg.data = vision_handshake_.command();
+    vision_capture_cmd_pub_->publish(msg);
+}
+
+void TunnelGuidanceNode::beginVisionCapture()
+{
+    waiting_for_vision_ = true;
+    vision_handshake_.beginCapture();
+    publishVisionCaptureCommand();
+    RCLCPP_INFO(
+        get_logger(),
+        "MCU capture_done, publishing vision_capture_cmd=0x01 on %s",
+        vision_capture_cmd_topic_.c_str());
+}
+
+void TunnelGuidanceNode::finishCaptureAndHold()
+{
+    if (waiting_to_depart_ && !waiting_for_mcu_ && !waiting_for_vision_) {
+        return;
+    }
+    waiting_for_mcu_ = false;
+    waiting_for_vision_ = false;
+    vision_handshake_.finish();
+    publishVisionCaptureCommand();
+    setCaptureEnable(false);
+    waiting_to_depart_ = true;
+    finishInspectionDataset(get_clock()->now());
+    RCLCPP_INFO(
+        get_logger(),
+        "Capture handshake finished, capture_enable=false, vision_cmd=0x00, "
+        "waiting to depart");
+}
+
 void TunnelGuidanceNode::resetInspectionHandshake()
 {
     auto_goal_dwelling_ = false;
+    waiting_for_mcu_ = false;
+    waiting_for_vision_ = false;
     waiting_to_depart_ = false;
     mcu_capture_done_ = false;
+    vision_handshake_.reset();
+    publishVisionCaptureCommand();
     dataset_recorder_.abortStation();
     dataset_ready_ = true;
     setCaptureEnable(false);
@@ -1115,9 +1224,20 @@ void TunnelGuidanceNode::publishHandshakeFlags()
     can_depart_pub_->publish(depart_msg);
 }
 
+bool TunnelGuidanceNode::mcuCaptureComplete() const
+{
+    return mcu_capture_done_ || !allow_capture_done_;
+}
+
+bool TunnelGuidanceNode::visionCaptureComplete() const
+{
+    return !wait_for_vision_ || !vision_handshake_.waiting();
+}
+
 bool TunnelGuidanceNode::inspectionCanDepart() const
 {
-    return (mcu_capture_done_ || !allow_capture_done_) &&
+    return mcuCaptureComplete() &&
+        visionCaptureComplete() &&
         (dataset_ready_ || !wait_for_dataset_);
 }
 

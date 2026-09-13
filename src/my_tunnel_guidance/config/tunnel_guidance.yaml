@@ -54,17 +54,22 @@ tunnel_guidance:
         enable_auto_goal: true
         auto_goal_frame_id: map
         min_goal_send_interval: 1.0
-        # 到达后停留，capture_enable=true 通知电控开灯拍照；1s 后拉低，再等电控 capture_done
+        # 到达后 capture_enable=true；dwell 结束后等电控 capture_done，再给视觉发 0x01
         auto_goal_dwell_time: 1.0
-        # true: 等 MCU capture_done 再搜下一个点。false: 跳过握手（仿真）
+        # true: 等 MCU capture_done 再进入视觉握手。false: 跳过电控（仿真）
         allow_capture_done: false # 开始实车前务必打开
+        # true: MCU 完成后向 /vision_capture_cmd 发 0x01，等 /vision_capture_status 的 0x02
+        wait_for_vision: false # 开始实车前务必打开
+        vision_capture_cmd_topic: /vision_capture_cmd
+        vision_capture_status_topic: /vision_capture_status
+        vision_cmd_hz: 20.0
         # dwell 内把原始 Mid360 变换到 map 并累积（不套导航 ROI）；结束后写入 PCD，并增量合并到 map.pcd
         enable_dataset_recording: true
         wait_for_dataset: true
         dataset_output_dir: /tmp/tunnel_inspections
         dataset_voxel_size: 0.03
-        # 放行条件：MCU capture_done（若 allow_capture_done）与 ~/dataset_ready 同时满足
-        # 可用 ~/can_depart、~/dataset_ready、~/merged_map 观察
+        # 放行条件：MCU capture_done（若 allow_capture_done）、视觉拍完（若 wait_for_vision）
+        # 与 ~/dataset_ready 同时满足。可用 ~/can_depart、~/dataset_ready、~/merged_map 观察
 
         # Initial calibration and wall model
         init_required_frames: 3

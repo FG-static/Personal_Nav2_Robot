@@ -15,6 +15,7 @@ def generate_launch_description():
     enable_auto_goal = LaunchConfiguration('enable_auto_goal')
     auto_goal_dwell_time = LaunchConfiguration('auto_goal_dwell_time')
     allow_capture_done = LaunchConfiguration('allow_capture_done')
+    wait_for_vision = LaunchConfiguration('wait_for_vision')
     wait_for_dataset = LaunchConfiguration('wait_for_dataset')
     dataset_output_dir = LaunchConfiguration('dataset_output_dir')
 
@@ -28,6 +29,7 @@ def generate_launch_description():
             'enable_auto_goal': enable_auto_goal,
             'auto_goal_dwell_time': auto_goal_dwell_time,
             'allow_capture_done': allow_capture_done,
+            'wait_for_vision': wait_for_vision,
             'wait_for_dataset': wait_for_dataset,
             'dataset_output_dir': dataset_output_dir,
         }],
@@ -48,7 +50,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'allow_capture_done',
             default_value='false',
-            description='Wait for MCU capture_done on /tracker/gimbal before the next inspection goal'),
+            description='Wait for MCU capture_done on /tracker/gimbal before vision capture'),
+        DeclareLaunchArgument(
+            'wait_for_vision',
+            default_value='false',
+            description='After MCU capture_done, command the vision node and wait for 0x02'),
         DeclareLaunchArgument(
             'wait_for_dataset',
             default_value='true',
