@@ -208,6 +208,13 @@ if(BUILD_TESTING)
         target_link_libraries(test_inspection_dataset_recorder ${PROJECT_NAME}_dataset)
         target_include_directories(test_inspection_dataset_recorder PRIVATE include)
     endif()
+
+    ament_add_gtest(test_vision_capture_handshake
+        test/test_vision_capture_handshake.cpp
+    )
+    if(TARGET test_vision_capture_handshake)
+        target_include_directories(test_vision_capture_handshake PRIVATE include)
+    endif()
 endif()
 
 ament_package()
