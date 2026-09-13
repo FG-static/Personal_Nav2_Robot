@@ -76,7 +76,7 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(
       get_logger(),
       "Opened %s. TX: AA + vx + wz + capture_enable + 55 (%zu B). "
-      "RX: AA + temp + capture_done + 55 (%zu B). cmd_vel=%s chassis_cmd=%s capture_enable=%s",
+      "RX: AA + capture_done + vx + wz + 55 (%zu B). cmd_vel=%s chassis_cmd=%s capture_enable=%s",
       device_name_.c_str(), TX_FRAME_LEN, RX_FRAME_LEN,
       cmd_vel_topic_.c_str(), chassis_cmd_topic_.c_str(), capture_enable_topic_.c_str());
   } catch (const std::exception & ex) {
@@ -116,7 +116,8 @@ RMSerialDriver::~RMSerialDriver()
 
 void RMSerialDriver::receiveData()
 {
-  // RX：0xAA + uint32 Temp + uint8 capture_done + 0x55。Linux CDC 可能拆包，搜帧头后再读满。
+  // RX：0xAA + uint8 capture_done + float vx + float wz + 0x55。
+  // Linux CDC 可能拆包，搜帧头后再读满。
   std::vector<uint8_t> hdr(1);
   std::vector<uint8_t> rest(RX_FRAME_LEN - 1);
 
@@ -144,7 +145,8 @@ void RMSerialDriver::receiveData()
 
       rm_interfaces::msg::Gimbal gimbal_msg;
       gimbal_msg.header.stamp = this->get_clock()->now();
-      gimbal_msg.temp = frame.temp;
+      gimbal_msg.vx = frame.vx;
+      gimbal_msg.wz = frame.wz;
       if (frame.capture_done == 0U || frame.capture_done == 1U) {
         gimbal_msg.capture_done = (frame.capture_done == 1U);
       } else {
@@ -156,7 +158,8 @@ void RMSerialDriver::receiveData()
 
       RCLCPP_INFO_THROTTLE(
         get_logger(), *get_clock(), 1000,
-        "RX temp=%u capture_done=%u", frame.temp, frame.capture_done);
+        "RX capture_done=%u vx=%.3f wz=%.3f",
+        frame.capture_done, frame.vx, frame.wz);
     } catch (const std::exception & ex) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 20, "Error while receiving data: %s", ex.what());

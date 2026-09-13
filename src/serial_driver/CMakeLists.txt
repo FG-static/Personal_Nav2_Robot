@@ -47,6 +47,12 @@ if(BUILD_TESTING)
     ament_cmake_uncrustify
   )
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_packet test/test_packet.cpp)
+  if(TARGET test_packet)
+    target_include_directories(test_packet PRIVATE include)
+  endif()
 endif()
 
 #############
