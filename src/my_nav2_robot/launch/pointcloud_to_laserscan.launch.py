@@ -9,8 +9,15 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('my_nav2_robot')
-    config = os.path.join(pkg_share, 'config', 'pointcloud_to_laserscan.yaml')
+    default_config = os.path.join(
+        pkg_share, 'config', 'pointcloud_to_laserscan.yaml')
+    config_file = LaunchConfiguration('config_file')
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
+
+    declare_config_file = DeclareLaunchArgument(
+        'config_file',
+        default_value=default_config,
+        description='PointCloud2-to-LaserScan parameter file')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
@@ -26,10 +33,11 @@ def generate_launch_description():
             ('cloud_in', '/livox/lidar'),
             ('scan', '/scan'),
         ],
-        parameters=[config, {'use_sim_time': use_sim_time}],
+        parameters=[config_file, {'use_sim_time': use_sim_time}],
     )
 
     return LaunchDescription([
+        declare_config_file,
         declare_use_sim_time,
         node,
     ])

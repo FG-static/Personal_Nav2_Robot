@@ -1,0 +1,19 @@
+# Real Mid360 horizontal slice for hardware_bringup / full_navigation_real.
+# Heights are in base_link, whose origin is at wheel-center height.
+# Ground is z=-0.1315 m; start the slice above it to suppress floor returns.
+# accumulation_duration is required by the in-tree Humble node (0 = no stitch).
+pointcloud_to_laserscan:
+    ros__parameters:
+        target_frame: base_link
+        transform_tolerance: 0.3
+        min_height: -0.08
+        max_height: 0.50
+        angle_min: -3.14159
+        angle_max: 3.14159
+        angle_increment: 0.0174533
+        scan_time: 0.1
+        range_min: 0.2
+        range_max: 12.0
+        use_inf: true
+        inf_epsilon: 1.0
+        accumulation_duration: 0.0
