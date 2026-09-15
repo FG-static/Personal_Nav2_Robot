@@ -80,6 +80,7 @@ namespace my_nav2_controller {
         double lim_a; // 加速度限制
         double lim_aw;
         double sim_time_; // 未来时间
+        bool allow_reverse;
         rclcpp::Duration transform_tolerance_{0, 0};
     };
 }

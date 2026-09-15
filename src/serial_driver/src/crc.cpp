@@ -3,8 +3,8 @@
 
 #include "rm_serial_driver/crc.hpp"
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 
 namespace crc16
 {

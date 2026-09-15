@@ -1,14 +1,16 @@
+// Copyright (c) 2022 ChenJun
+// Licensed under the Apache-2.0 License.
+
 /*
   安装依赖
   sudo apt install ros-humble-serial-driver
   以下仅供参考
 */
 
-// ROS
-#include <rclcpp/logging.hpp>
-#include <rclcpp/qos.hpp>
-#include <rclcpp/utilities.hpp>
-#include <serial_driver/serial_driver.hpp>
+#include "rm_serial_driver/rm_serial_driver.hpp"
+
+// C system
+#include <unistd.h>
 
 // C++ system
 #include <algorithm>
@@ -21,8 +23,13 @@
 #include <string>
 #include <vector>
 
+// ROS
+#include <rclcpp/logging.hpp>
+#include <rclcpp/qos.hpp>
+#include <rclcpp/utilities.hpp>
+#include <serial_driver/serial_driver.hpp>
+
 #include "rm_serial_driver/packet.hpp"
-#include "rm_serial_driver/rm_serial_driver.hpp"
 
 namespace rm_serial_driver
 {
@@ -64,8 +71,7 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     capture_enable_topic_, rclcpp::QoS(1).reliable().transient_local(),
     std::bind(&RMSerialDriver::onCaptureEnable, this, std::placeholders::_1));
 
-  gimbal_pub_ = this->create_publisher<rm_interfaces::msg::Gimbal>(
-    "/tracker/gimbal", 10);
+  gimbal_pub_ = this->create_publisher<rm_interfaces::msg::Gimbal>("/tracker/gimbal", 10);
 
   try {
     serial_driver_->init_port(device_name_, *device_config_);
@@ -77,8 +83,8 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
       get_logger(),
       "Opened %s. TX: AA + vx + wz + capture_enable + 55 (%zu B). "
       "RX: AA + capture_done + vx + wz + 55 (%zu B). cmd_vel=%s chassis_cmd=%s capture_enable=%s",
-      device_name_.c_str(), TX_FRAME_LEN, RX_FRAME_LEN,
-      cmd_vel_topic_.c_str(), chassis_cmd_topic_.c_str(), capture_enable_topic_.c_str());
+      device_name_.c_str(), TX_FRAME_LEN, RX_FRAME_LEN, cmd_vel_topic_.c_str(),
+      chassis_cmd_topic_.c_str(), capture_enable_topic_.c_str());
   } catch (const std::exception & ex) {
     RCLCPP_ERROR(
       get_logger(), "Error creating serial port: %s - %s", device_name_.c_str(), ex.what());
@@ -90,8 +96,7 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     cmd_tx_timer_ = this->create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
       std::bind(&RMSerialDriver::sendCmdTick, this));
-    RCLCPP_INFO(
-      get_logger(), "Chassis TX %.1f Hz, timeout %.2f s", cmd_send_hz_, cmd_timeout_sec_);
+    RCLCPP_INFO(get_logger(), "Chassis TX %.1f Hz, timeout %.2f s", cmd_send_hz_, cmd_timeout_sec_);
   }
 }
 
@@ -131,8 +136,7 @@ void RMSerialDriver::receiveData()
       serial_driver_->port()->receive(rest);
       if (rest.back() != FRAME_TAIL) {
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 200,
-          "frame tail mismatch: got 0x%02X", rest.back());
+          get_logger(), *get_clock(), 200, "frame tail mismatch: got 0x%02X", rest.back());
         continue;
       }
 
@@ -151,15 +155,14 @@ void RMSerialDriver::receiveData()
         gimbal_msg.capture_done = (frame.capture_done == 1U);
       } else {
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "illegal capture_done=%u, expected 0 or 1", frame.capture_done);
+          get_logger(), *get_clock(), 1000, "illegal capture_done=%u, expected 0 or 1",
+          frame.capture_done);
       }
       gimbal_pub_->publish(gimbal_msg);
 
       RCLCPP_INFO_THROTTLE(
-        get_logger(), *get_clock(), 1000,
-        "RX capture_done=%u vx=%.3f wz=%.3f",
-        frame.capture_done, frame.vx, frame.wz);
+        get_logger(), *get_clock(), 1000, "RX capture_done=%u vx=%.3f wz=%.3f", frame.capture_done,
+        frame.vx, frame.wz);
     } catch (const std::exception & ex) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 20, "Error while receiving data: %s", ex.what());
@@ -225,7 +228,7 @@ void RMSerialDriver::transmit(float vx, float wz, bool capture_enable)
     SendFrame frame{};
     frame.header = FRAME_HEADER;
     frame.vx = vx;
-    frame.wz = wz;
+    frame.wz = scaleWzForMcu(wz);
     frame.capture_enable = boolToU8(capture_enable);
     frame.tail = FRAME_TAIL;
 
@@ -234,15 +237,14 @@ void RMSerialDriver::transmit(float vx, float wz, bool capture_enable)
     const size_t written = serial_driver_->port()->send(data);
     if (written != data.size()) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 200,
-        "short serial write: %zu / %zu", written, data.size());
+        get_logger(), *get_clock(), 200, "short serial write: %zu / %zu", written, data.size());
       return;
     }
 
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "TX vx=%.3f wz=%.3f capture_enable=%u raw=[%s]",
-      vx, wz, static_cast<unsigned>(boolToU8(capture_enable)), toHex(data).c_str());
+      "TX cmd vx=%.3f wz=%.3f -> mcu vx=%.3f wz=%.3f capture_enable=%u raw=[%s]", vx, wz, frame.vx,
+      frame.wz, static_cast<unsigned>(frame.capture_enable), toHex(data).c_str());
   } catch (const std::exception & ex) {
     RCLCPP_ERROR(get_logger(), "Error while sending data: %s", ex.what());
     reopenPort();
@@ -338,20 +340,45 @@ void RMSerialDriver::getParams()
 
 void RMSerialDriver::reopenPort()
 {
-  RCLCPP_WARN(get_logger(), "Attempting to reopen port");
-  try {
-    if (serial_driver_->port()->is_open()) {
-      serial_driver_->port()->close();
-    }
-    serial_driver_->port()->open();
-    RCLCPP_INFO(get_logger(), "Successfully reopened port");
-  } catch (const std::exception & ex) {
-    RCLCPP_ERROR(get_logger(), "Error while reopening port: %s", ex.what());
-    if (rclcpp::ok()) {
+  std::lock_guard<std::mutex> lock(reopen_mutex_);
+  while (rclcpp::ok()) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000, "Attempting to reopen %s", device_name_.c_str());
+    try {
+      if (serial_driver_->port() && serial_driver_->port()->is_open()) {
+        serial_driver_->port()->close();
+      }
+      const std::string path = resolveDevicePath();
+      if (path != device_name_) {
+        RCLCPP_WARN(
+          get_logger(), "Serial device moved %s -> %s", device_name_.c_str(), path.c_str());
+        device_name_ = path;
+        serial_driver_->init_port(device_name_, *device_config_);
+      }
+      serial_driver_->port()->open();
+      RCLCPP_INFO(get_logger(), "Successfully reopened %s", device_name_.c_str());
+      return;
+    } catch (const std::exception & ex) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Error while reopening %s: %s", device_name_.c_str(),
+        ex.what());
       rclcpp::sleep_for(std::chrono::seconds(1));
-      reopenPort();
     }
   }
+}
+
+std::string RMSerialDriver::resolveDevicePath() const
+{
+  if (::access(device_name_.c_str(), F_OK) == 0) {
+    return device_name_;
+  }
+  for (int i = 0; i < 8; ++i) {
+    const std::string candidate = "/dev/ttyACM" + std::to_string(i);
+    if (::access(candidate.c_str(), F_OK) == 0) {
+      return candidate;
+    }
+  }
+  return device_name_;
 }
 
 }  // namespace rm_serial_driver

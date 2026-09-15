@@ -75,3 +75,15 @@ TEST(SerialPacket, SendFrameMatchesMcuRxLayout)
   EXPECT_FLOAT_EQ(vx, 1.25f);
   EXPECT_FLOAT_EQ(wz, 0.5f);
 }
+
+TEST(SerialPacket, ScaleWzForMcu)
+{
+  using rm_serial_driver::scaleWzForMcu;
+
+  EXPECT_FLOAT_EQ(scaleWzForMcu(0.f), 0.f);
+  EXPECT_FLOAT_EQ(scaleWzForMcu(0.3f), 11.1f);
+  EXPECT_FLOAT_EQ(scaleWzForMcu(0.1f), 3.9f);
+  EXPECT_FLOAT_EQ(scaleWzForMcu(0.2f), 7.4f);
+  EXPECT_FLOAT_EQ(scaleWzForMcu(-0.1f), -3.9f);
+  EXPECT_FLOAT_EQ(scaleWzForMcu(-0.5f), -18.5f);
+}

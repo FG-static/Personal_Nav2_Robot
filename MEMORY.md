@@ -2,7 +2,7 @@
 
 Working notes for this machine and the `humble` branch. Not a substitute for [`src/HUMBLE_PORTING.md`](src/HUMBLE_PORTING.md) or [`src/README.md`](src/README.md).
 
-Last updated: 2026-09-12.
+Last updated: 2026-09-15.
 
 ## People
 
@@ -35,7 +35,7 @@ Related GitHub: `FG-static/small_point_lio_lc`.
 - **`humble`**: Ubuntu 22.04 + Humble + Gazebo Classic. Current checkout.
 - When `main` moves, **do not cherry-pick blindly**. Port to Humble-runnable form first, then apply locally. User said so explicitly.
 - Local `main` may lag `origin/main`. That is expected; this tree tracks `humble`.
-- Last pushed humble tip at last check: `2eae617` *Fit inspection goal heading over a 2 m path window.*
+- Last synced humble tip: `7f3032f` *Merge PR #12 CAD hardware URDF + Mid360 +pi yaw* (2026-09-15). Includes PR #11 vision handshake and PR #10 MCU serial frame.
 - `origin/main` had two commits **not** yet on `origin/humble`:
   - `702af0f` Improve A* search and B-Spline smoother robustness
   - `8eb147b` Add Mid360 hardware bringup support
@@ -81,7 +81,7 @@ ros2 launch my_nav2_robot full_navigation_real.launch.py            # slam:=True
 
 - Includes `hardware_bringup.launch.py`: real Mid360 driver (`/livox/lidar` + `/livox/imu`), pointcloud_to_laserscan (`/scan`), RSP/JSP. `use_sim_time` stays false.
 - `nav2_bringup` with slam:=True (slam_toolbox publishes map->odom), params `nav2_params_slam_diff.yaml` (or slam.yaml for mecanum), `odom_topic` rewritten to `/bievr_lio/odom`, `tf_broadcast:=False`. slam:=False falls back to AMCL + map_server + identity static map->odom.
-- `serial:=true` (default) starts `rm_serial_driver` on /dev/ttyACM0 for /cmd_vel -> MCU. `tunnel_guidance` is NOT started (dropped on 2026-09-13, re-add later if asked).
+- `serial:=true` (default) starts `rm_serial_driver` on /dev/ttyACM0 for `/cmd_vel` → MCU.
 - **BIEVR-LIO runs in a separate terminal** (Ceres conflict) and must start **before/with** Nav2, or local_costmap logs odom-TF timeouts until it appears:
 
 ```bash
@@ -89,10 +89,12 @@ source /home/nav/bievr_ws/quick_source.sh
 ros2 launch bievr_lio_ros2 process_topics.launch.py sensor_config:=nav2_real params:=params rviz:=false
 ```
 
-- New sensor config `bievr_ws/src/BIEVR-LIO/config/sensor_configs/nav2_real.yaml` (bievr_ws is **not** a git repo): topics /livox/lidar + /livox/imu, Mid360 built-in IMU extrinsic `[0.04165, 0.02326, -0.0284]` (same as gamma/mars), `imu.normalized: 1.0` because livox_ros_driver2 passes the Mid360 IMU through in **g units** (Gazebo publishes m/s^2 — that is why nav2_sim has normalized: 0), max range 40 m, `map.frame: odom`, `imu.frame: base_footprint`. With `use_sim_time:=auto` (default) this name stays on wall clock.
+- Sensor config `bievr_ws/src/BIEVR-LIO/config/sensor_configs/nav2_real.yaml`: topics `/livox/lidar` + `/livox/imu`, corrected LiDAR→IMU and IMU→base_footprint extrinsics, automatic acceleration-unit detection (`imu.normalized: -1.0`), max range 40 m, `map.frame: odom`, `imu.frame: base_footprint`. With `use_sim_time:=auto` (default) this name stays on wall clock.
 - Verified end-to-end 2026-09-13 on the live Mid360: sensors 10 Hz / 200 Hz, /scan wall-clock stamped, BIEVR odom + odom->base_footprint TF, slam_toolbox /map, both lifecycle managers active.
-- `tunnel:=true` starts my_tunnel_guidance auto inspection; `allow_capture_done` default true (MCU capture_done handshake via /capture_enable -> rm_serial_driver -> MCU, chassis-status capture_done back to the node). tunnel_guidance.yaml has enable_auto_goal: true.
+- `tunnel:=true` starts my_tunnel_guidance auto inspection. Real launch defaults `allow_capture_done:=true` and `wait_for_vision:=true`. yaml / sim launch keep both **false**.
 - Synced to **culvert_nav** (2026-09-13, per FGoose request; it is the workspace he runs on the robot): copied `hardware_bringup.launch.py`, `livox_mid360.launch.py`, `MID360_config.json`, `check_mid360_net.sh`, and the identical `full_navigation_real.launch.py` (culvert_nav CMake got the check script in install(PROGRAMS)); rebuilt its my_nav2_robot. culvert_nav has only robot_diff.urdf.xacro (no mecanum) and bare tunnel_guidance.launch.py. Running culvert_nav needs `/opt/ros/humble` + `/home/nav/livox_ws/install` + `/home/nav/culvert_nav/install` sourced; BIEVR still from bievr_ws with `sensor_config:=nav2_real`.
+- 2026-09-15: humble PR #12 (`7f3032f`) pulled into nav2_test and copied onto culvert_nav (no `culvert_ws` on this machine). Real bringup uses `robot_hardware.urdf.xacro` (`livox_yaw = pi + 0.02860`) and `pointcloud_to_laserscan_hardware.yaml`. Serial TX uses `frame.vx = vx`; MCU yaw commands use scale 37 and minimum magnitude 3.9. Culvert forward-only DWA tuning and serial reconnect handling were ported back to `nav2_test` on `sync/culvert-humble-20260915`.
+- Also synced the **whole `my_tunnel_guidance` package** to culvert_nav (2026-09-13): the keyframe/offline-map recorder (`inspection_dataset_recorder`, records map-frame Mid360 clouds per dwell station into PCD + merged `map.pcd` under `/tmp/tunnel_inspections`, `dataset_voxel_size: 0.03`, `wait_for_dataset: true` gates departure on ~/dataset_ready) plus `inspection_dataset_live` tool. rm_interfaces identical in both workspaces. culvert_nav rebuilt; all 27 gtest cases pass there (recorder 2, timing 3, geometry 4, search 14). The two workspaces' my_tunnel_guidance are now identical trees.
 
 ## Launch-environment gotchas (learned 2026-09-12/13)
 
@@ -162,6 +164,26 @@ Hardware JSON (`src/my_nav2_robot/config/MID360_config.json`):
 - Do not wire BIEVR into `full_navigation.launch.py` (that was tried and reverted). Two terminals.
 - BIEVR consumes `/livox/lidar` + `/livox/imu`, publishes `/bievr_lio/odom`. If using it, Nav2 `odom_topic` should be `/bievr_lio/odom`, and **do not** also run `use_ground_truth_odom:=true` (two `odom→base_footprint` TFs).
 - Mid360 sim timestamps: if point `t` exceeds ~0.2 s BIEVR drops the cloud and IMU-only odom flies. Sim plugin should stamp against the nominal 10 Hz period.
+
+## MCU serial + vision capture (humble `fe58d5b`, PRs #10 / #11)
+
+Serial frames (`#pragma pack(1)`, little-endian, `0xAA` … `0x55`):
+
+- MCU → host (11 B): `capture_done u8` + `vx f32` + `wz f32`
+- Host → MCU (11 B): `vx f32` + `wz f32` + `capture_enable u8`
+
+`rm_interfaces/Gimbal.msg` no longer has `temp`. It now carries `capture_done`, `vx`, `wz`. Tunnel guidance still only reads `capture_done` on `/tracker/gimbal`.
+
+Vision topics (`std_msgs/UInt8`):
+
+- Host `/vision_capture_cmd`: `0x00` idle, `0x01` capture (20 Hz while waiting)
+- Vision `/vision_capture_status`: `0x00` idle, `0x01` capturing, `0x02` done
+- Handshake requires `0x01` then `0x02` so a leftover `0x02` from the previous station is ignored
+- Dwell keeps `capture_enable=true` until MCU done (and vision done if enabled); only then pull enable low and finish the dataset
+
+Sim: both handshakes skipped. Real: `full_navigation_real.launch.py` turns both on.
+
+QoS on the vision pair is reliable depth 1. If the vision node publishes `0x01` then `0x02` in one burst, `0x01` can be dropped and the handshake will stall until a later `0x01`. Widen the queue if that shows up on the robot.
 
 ## Coding conventions in this tree
 

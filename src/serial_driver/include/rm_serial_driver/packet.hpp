@@ -5,6 +5,7 @@
 #define RM_SERIAL_DRIVER__PACKET_HPP_
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -20,9 +21,21 @@ namespace rm_serial_driver
 static constexpr uint8_t FRAME_HEADER = 0xAA;
 static constexpr uint8_t FRAME_TAIL = 0x55;
 
-inline uint8_t boolToU8(bool value)
+inline uint8_t boolToU8(bool value) { return value ? 1U : 0U; }
+
+// 发给电控的 wz：ROS rad/s × 37。非零时绝对值至少为 3.9，停车（0）保持 0。
+inline float scaleWzForMcu(float wz)
 {
-  return value ? 1U : 0U;
+  constexpr float kScale = 37.f;
+  constexpr float kMinAbs = 3.9f;
+  const float scaled = wz * kScale;
+  if (scaled == 0.f) {
+    return 0.f;
+  }
+  if (std::fabs(scaled) < kMinAbs) {
+    return std::copysign(kMinAbs, scaled);
+  }
+  return scaled;
 }
 
 #pragma pack(push, 1)
@@ -52,7 +65,7 @@ static constexpr size_t TX_FRAME_LEN = 11;
 static_assert(sizeof(ReceiveFrame) == RX_FRAME_LEN, "RX frame size mismatch with protocol");
 static_assert(sizeof(SendFrame) == TX_FRAME_LEN, "TX frame size mismatch with protocol");
 
-template<typename FrameT>
+template <typename FrameT>
 inline std::vector<uint8_t> toVector(const FrameT & data)
 {
   std::vector<uint8_t> packet(sizeof(FrameT));

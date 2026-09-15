@@ -3,7 +3,7 @@
 # Usage: check_mid360_net.sh [lidar_ip] [host_ip]
 set -euo pipefail
 
-LIDAR_IP="${1:-192.168.1.12}"
+LIDAR_IP="${1:-192.168.1.161}"
 HOST_IP="${2:-192.168.1.50}"
 
 echo "Interfaces:"

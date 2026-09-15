@@ -25,9 +25,9 @@
                           output_path="{path}"
                           goal="{goal}"
                           replan_event_topic="trajectory_generation/replan_event"/>
-        <!-- controller_id: DWB (official diff) | DWA (custom) | FollowPath (alias of DWA) -->
+        <!-- FollowPath uses the forward-only custom DWA controller. -->
         <FollowPath path="{path}"
-                    controller_id="DWB"/>
+                    controller_id="FollowPath"/>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>

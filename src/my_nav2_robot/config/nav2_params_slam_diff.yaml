@@ -1,8 +1,8 @@
 # Diff-drive SLAM params (chassis:=diff). Based on nav2_params_slam.yaml.
 # Differences vs mecanum slam:
 #   - AMCL uses DifferentialMotionModel (unused in slam_toolbox bringup, kept consistent).
-#   - BT uses official DWB (dwb_core::DWBLocalPlanner). Custom DWA stays registered as fallback.
-#   - Goal checker requires yaw; velocity_smoother clamps vy to 0.
+#   - BT uses custom DWA (FollowPath) with forward-only motion.
+#   - Goal checker is xy-only (yaw_goal_tolerance=pi); velocity_smoother clamps vy to 0.
 # Planners / smoothers are unchanged; Hybrid A* remains mecanum and is not selected.
 
 amcl:
@@ -242,7 +242,8 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.06
+      # The chassis currently does not execute a final in-place yaw.
+      yaw_goal_tolerance: 3.14
       stateful: True
     # BT 默认 controller_id 仍是 FollowPath，这里接到差速 DWA。
     FollowPath:
@@ -253,11 +254,12 @@ controller_server:
       unknown_cost_weight: 1.0
       lookahead_dist: 0.8
       max_v: 0.5
-      max_w: 1.5
+      max_w: 0.6
       lim_a: 2.5
       lim_aw: 3.2
       sim_time: 1.5
       transform_tolerance: 0.1
+      allow_reverse: false
     MPC:
       plugin: "my_mpc_controller/MyMPCController"
       q_11: 30.0
@@ -366,21 +368,22 @@ controller_server:
       unknown_cost_weight: 1.0
       lookahead_dist: 0.8
       max_v: 0.5
-      max_w: 1.5
+      max_w: 0.6
       lim_a: 2.5
       lim_aw: 3.2
       sim_time: 1.5
-      transform_tolerance: 0.1
+      transform_tolerance: 0.5
+      allow_reverse: false
     # 官方 DWB（差速：max_vel_y=0, vy_samples=1 so Y iterator still runs）
     DWB:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: true
       trajectory_generator_name: "dwb_plugins::StandardTrajectoryGenerator"
-      min_vel_x: 0.0
+      min_vel_x: -0.3
       min_vel_y: 0.0
       max_vel_x: 0.5
       max_vel_y: 0.0
-      max_vel_theta: 1.5
+      max_vel_theta: 0.6
       min_speed_xy: 0.0
       max_speed_xy: 0.5
       min_speed_theta: 0.0
@@ -401,7 +404,9 @@ controller_server:
       trans_stopped_velocity: 0.15
       short_circuit_trajectory_evaluation: true
       stateful: true
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      # Avoid the high-rate in-place yaw command that previously destabilized
+      # the MCU USB CDC connection.
+      critics: ["Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.1
@@ -409,9 +414,6 @@ controller_server:
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
   local_costmap:
@@ -659,8 +661,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.5, 0.0, 1.5]
-    min_velocity: [-0.5, 0.0, -1.5]
+    max_velocity: [0.5, 0.0, 0.6]
+    min_velocity: [-0.5, 0.0, -0.6]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "/bievr_lio/odom"

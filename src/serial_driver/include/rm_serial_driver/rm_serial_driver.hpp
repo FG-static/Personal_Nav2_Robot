@@ -4,8 +4,16 @@
 #ifndef RM_SERIAL_DRIVER__RM_SERIAL_DRIVER_HPP_
 #define RM_SERIAL_DRIVER__RM_SERIAL_DRIVER_HPP_
 
-#include <tf2_ros/transform_broadcaster.h>
+// C++ system
+#include <cstdint>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
+// ROS
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <rclcpp/publisher.hpp>
@@ -16,18 +24,11 @@
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <tf2_ros/transform_broadcaster.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-// C++ system
-#include <cstdint>
-#include <future>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <vector>
 
-#include "rm_interfaces/msg/target.hpp"
 #include "rm_interfaces/msg/gimbal.hpp"
+#include "rm_interfaces/msg/target.hpp"
 
 namespace rm_serial_driver
 {
@@ -57,6 +58,8 @@ private:
 
   void reopenPort();
 
+  std::string resolveDevicePath() const;
+
   void getParams();
 
   // Serial port
@@ -73,6 +76,7 @@ private:
 
   std::mutex send_mutex_;
   std::mutex cmd_mutex_;
+  std::mutex reopen_mutex_;
   float vx_{0.f};
   float wz_{0.f};
   bool capture_enable_{false};

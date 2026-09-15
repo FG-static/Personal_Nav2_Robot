@@ -1,4 +1,7 @@
 #include "my_nav2_controller/dwa_controller.hpp"
+
+#include <algorithm>
+
 #include "nav2_core/exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_util/node_utils.hpp"
@@ -60,6 +63,9 @@ namespace my_nav2_controller {
         declare_parameter_if_not_declared(
             node, plugin_name_ + ".transform_tolerance", rclcpp::ParameterValue(0.1)
         );
+        declare_parameter_if_not_declared(
+            node, plugin_name_ + ".allow_reverse", rclcpp::ParameterValue(false)
+        );
 
         // 获取参数
         node->get_parameter(plugin_name_ + ".alpha", alpha);
@@ -72,6 +78,7 @@ namespace my_nav2_controller {
         node->get_parameter(plugin_name_ + ".lim_a", lim_a);
         node->get_parameter(plugin_name_ + ".lim_aw", lim_aw);
         node->get_parameter(plugin_name_ + ".sim_time", sim_time_);
+        node->get_parameter(plugin_name_ + ".allow_reverse", allow_reverse);
 
         double transform_tolerance;
         node->get_parameter(plugin_name_ + ".transform_tolerance", transform_tolerance);
@@ -104,6 +111,7 @@ namespace my_nav2_controller {
         const geometry_msgs::msg::Twist & velocity,
         nav2_core::GoalChecker *goal_checker) {
 
+        (void)goal_checker;
         auto node = node_.lock();
         auto costmap = costmap_ros_->getCostmap();
 
@@ -133,15 +141,20 @@ namespace my_nav2_controller {
             target_pose = global_plan_.poses.back();
         }
         // 计算到诱饵点的角度
-        double target_yaw = std::atan2(target_pose.pose.position.y - r_y,
-                                 target_pose.pose.position.x - r_x);
+        const double target_x = target_pose.pose.position.x;
+        const double target_y = target_pose.pose.position.y;
+        double target_yaw = std::atan2(target_y - r_y, target_x - r_x);
+        const double start_remaining = std::hypot(target_x - r_x, target_y - r_y);
 
         // 动态窗口
-        double dt = 0.1,
-            v_min = std::max(0.0, velocity.linear.x - lim_a * dt),
-            v_max = std::min(max_v, velocity.linear.x + lim_a * dt),
-            w_min = velocity.angular.z - lim_aw * dt,
-            w_max = velocity.angular.z + lim_aw * dt;
+        const double dt = 0.1;
+        const double min_allowed_v = allow_reverse ? -max_v : 0.0;
+        const double current_v = std::clamp(velocity.linear.x, min_allowed_v, max_v);
+        const double current_w = std::clamp(velocity.angular.z, -max_w, max_w);
+        const double v_min = std::max(min_allowed_v, current_v - lim_a * dt);
+        const double v_max = std::min(max_v, current_v + lim_a * dt);
+        const double w_min = std::max(-max_w, current_w - lim_aw * dt);
+        const double w_max = std::min(max_w, current_w + lim_aw * dt);
 
         Path best_path = {0.0, 0.0, -1e9, 0.0, 0.0};
 
@@ -187,8 +200,7 @@ namespace my_nav2_controller {
                 }
 
                 if (collided) continue;
-                // 评分
-                // Heading
+                // 评分：车头朝向、目标进度和前进速度。
                 double diff_angle = std::abs(cal_diff_angle(alp, target_yaw)),
                     heading_score = (M_PI - diff_angle) / M_PI;
 
@@ -202,11 +214,16 @@ namespace my_nav2_controller {
                     static_cast<double>(costmap_sample_count) : 0.0;
                 const double unknown_penalty = unknown_cost_weight * unknown_ratio;
 
-                // Velocity
-                const double velocity_score = v / max_v;
+                const double remaining = std::hypot(
+                    (x + r_x) - target_x, (y + r_y) - target_y);
+                const double progress_score =
+                    (start_remaining - remaining) /
+                    std::max(lookahead_dist, 1e-3);
+                const double velocity_score = v / std::max(max_v, 1e-3);
                 const double score = alpha * heading_score +
                     beta * distance_score +
-                    gamma * velocity_score - unknown_penalty;
+                    gamma * (0.5 * progress_score + 0.5 * velocity_score) -
+                    unknown_penalty;
                 if (score > best_path.score) best_path = {v, w, score, 0.0, 0.0};
             }
         }
