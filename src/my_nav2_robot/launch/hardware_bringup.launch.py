@@ -42,7 +42,11 @@ def generate_launch_description():
         executable='joint_state_publisher',
         name='joint_state_publisher',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'robot_description': ParameterValue(
+                robot_description, value_type=str),
+        }],
     )
 
     livox_launch = IncludeLaunchDescription(
