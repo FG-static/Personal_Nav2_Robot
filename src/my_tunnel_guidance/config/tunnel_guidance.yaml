@@ -13,7 +13,8 @@ tunnel_guidance:
         min_side_lateral_distance: 1.0
         min_height: -0.5
         max_height: 2.2
-        ground_max_z: 0.0
+        # base_link is at wheel-center height; ground is z=-0.1315 m.
+        ground_max_z: -0.08
         voxel_leaf_size: 0.05
 
         # Plane fitting quality gates
@@ -34,9 +35,10 @@ tunnel_guidance:
         search_min_x: -0.5
         search_max_x: 8.0
         search_half_width: 3.0
-        search_obstacle_min_height: 0.15
+        search_obstacle_min_height: -0.08
         search_obstacle_max_height: 1.30
-        search_robot_clearance: 0.30
+        # Circumscribed radius of the 0.88 x 0.62 m Nav2 footprint.
+        search_robot_clearance: 0.54
         search_clearance_weight: 2.0
         search_clearance_decay: 0.50
         # Unknown 区通行代价乘子（>=1）：路径允许穿过未观测区域，

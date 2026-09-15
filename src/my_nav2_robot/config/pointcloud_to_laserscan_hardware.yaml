@@ -1,11 +1,12 @@
-# Project the simulated Mid360 PointCloud2 onto a 2D LaserScan.
-# Heights are in laser_link; the simulated ground is about z=-0.19 m.
+# Real Mid360 horizontal slice.
+# Heights are in base_link, whose origin is at wheel-center height.
+# Ground is z=-0.1315 m; start the slice above it to suppress floor returns.
 pointcloud_to_laserscan:
     ros__parameters:
-        target_frame: laser_link
+        target_frame: base_link
         transform_tolerance: 0.3
-        min_height: -0.15
-        max_height: 0.40
+        min_height: -0.08
+        max_height: 0.50
         angle_min: -3.14159
         angle_max: 3.14159
         angle_increment: 0.0174533
