@@ -1,0 +1,139 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="culvert_inspection_robot">
+
+    <!--
+      Real-robot geometry reconstructed from the SolidWorks assembly.
+      Used by hardware_bringup / full_navigation_real. Simulation keeps
+      robot.urdf.xacro and robot_diff.urdf.xacro (Gazebo Classic plugins).
+
+      Frames:
+        base_footprint: wheel-contact rectangle center on the ground
+        base_link:      wheel-center rectangle center (z = wheel_radius)
+
+      CAD / base_link +x points to the assembled vehicle tail. Driving
+      forward and Mid360 optical +x (point-cloud X) are the opposite way,
+      so livox_yaw is the CAD yaw 0.02860 plus pi.
+    -->
+
+    <xacro:property name="wheel_radius" value="0.1315"/>
+    <xacro:property name="wheel_width" value="0.0680"/>
+    <xacro:property name="wheel_x" value="0.3002"/>
+    <xacro:property name="wheel_y" value="0.2640"/>
+    <xacro:property name="base_link_height" value="${wheel_radius}"/>
+
+    <xacro:property name="chassis_x" value="0.5000"/>
+    <xacro:property name="chassis_y" value="0.5036"/>
+    <xacro:property name="chassis_z" value="0.0630"/>
+    <xacro:property name="chassis_origin_x" value="-0.00013"/>
+    <xacro:property name="chassis_origin_y" value="-0.02936"/>
+    <xacro:property name="chassis_origin_z" value="0.07282"/>
+
+    <xacro:property name="livox_x" value="0.08104"/>
+    <xacro:property name="livox_y" value="-0.00245"/>
+    <xacro:property name="livox_z" value="0.33932"/>
+    <xacro:property name="livox_yaw" value="${pi + 0.02860}"/>
+
+    <material name="chassis_blue">
+        <color rgba="0.08 0.25 0.80 1.0"/>
+    </material>
+    <material name="wheel_black">
+        <color rgba="0.03 0.03 0.03 1.0"/>
+    </material>
+    <material name="livox_red">
+        <color rgba="0.85 0.08 0.08 1.0"/>
+    </material>
+    <material name="cad_x_yellow">
+        <color rgba="1.0 0.75 0.0 1.0"/>
+    </material>
+
+    <link name="base_footprint"/>
+
+    <link name="base_link">
+        <visual name="chassis">
+            <origin
+                xyz="${chassis_origin_x} ${chassis_origin_y} ${chassis_origin_z}"
+                rpy="0 0 0"/>
+            <geometry>
+                <box size="${chassis_x} ${chassis_y} ${chassis_z}"/>
+            </geometry>
+            <material name="chassis_blue"/>
+        </visual>
+        <!-- Marks CAD / base_link +x (assembled vehicle tail). -->
+        <visual name="cad_x_indicator">
+            <origin xyz="0.245 -0.02936 0.105" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.025 0.16 0.025"/>
+            </geometry>
+            <material name="cad_x_yellow"/>
+        </visual>
+        <collision>
+            <origin
+                xyz="${chassis_origin_x} ${chassis_origin_y} ${chassis_origin_z}"
+                rpy="0 0 0"/>
+            <geometry>
+                <box size="${chassis_x} ${chassis_y} ${chassis_z}"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="base_footprint_to_base_link" type="fixed">
+        <parent link="base_footprint"/>
+        <child link="base_link"/>
+        <origin xyz="0 0 ${base_link_height}" rpy="0 0 0"/>
+    </joint>
+
+    <xacro:macro name="wheel" params="prefix x y">
+        <link name="${prefix}_wheel_link">
+            <visual>
+                <!-- A URDF cylinder points along z; rotate it so its axle is y. -->
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+                <geometry>
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                </geometry>
+                <material name="wheel_black"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="${pi / 2} 0 0"/>
+                <geometry>
+                    <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+                </geometry>
+            </collision>
+        </link>
+        <joint name="${prefix}_wheel_joint" type="continuous">
+            <parent link="base_link"/>
+            <child link="${prefix}_wheel_link"/>
+            <origin xyz="${x} ${y} 0" rpy="0 0 0"/>
+            <axis xyz="0 1 0"/>
+            <limit effort="50" velocity="50"/>
+        </joint>
+    </xacro:macro>
+
+    <xacro:wheel prefix="front_left" x="${wheel_x}" y="${wheel_y}"/>
+    <xacro:wheel prefix="front_right" x="${wheel_x}" y="${-wheel_y}"/>
+    <xacro:wheel prefix="rear_left" x="${-wheel_x}" y="${wheel_y}"/>
+    <xacro:wheel prefix="rear_right" x="${-wheel_x}" y="${-wheel_y}"/>
+
+    <!-- Mid360 link origin is the official point-cloud origin O. -->
+    <link name="livox_frame">
+        <visual>
+            <!-- The body center is approximately 17 mm below point-cloud O. -->
+            <origin xyz="-0.004 0 -0.017" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.073 0.065 0.060"/>
+            </geometry>
+            <material name="livox_red"/>
+        </visual>
+        <collision>
+            <origin xyz="-0.004 0 -0.017" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.073 0.065 0.060"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="base_to_livox" type="fixed">
+        <parent link="base_link"/>
+        <child link="livox_frame"/>
+        <origin xyz="${livox_x} ${livox_y} ${livox_z}" rpy="0 0 ${livox_yaw}"/>
+    </joint>
+</robot>

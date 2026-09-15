@@ -13,6 +13,10 @@ tunnel_guidance:
         min_side_lateral_distance: 1.0
         min_height: -0.5
         max_height: 2.2
+        # Sim base_link is near the chassis; keep 0.0 here. Real CAD base_link
+        # is at wheel-center height (ground z=-0.1315). full_navigation_real
+        # overrides ground_max_z / search_obstacle_min_height to -0.08 and
+        # search_robot_clearance to 0.54 (circumscribed CAD footprint).
         ground_max_z: 0.0
         voxel_leaf_size: 0.05
 

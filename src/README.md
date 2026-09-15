@@ -21,11 +21,11 @@ rosdep install --from-paths src --ignore-src -r -y
 | 实现 | 本仓库 `my_nav2_robot` 的 `pointcloud_to_laserscan_node`（算法对齐官方 Humble `pointcloud_to_laserscan`，不依赖该 apt 包） |
 | 节点名 | `pointcloud_to_laserscan` |
 | 输入 | `/livox/lidar`（`livox_frame`） |
-| 输出 | `/scan`（`laser_link`，Best Effort，与 AMCL / SLAM Toolbox / costmap 一致） |
-| 参数 | `src/my_nav2_robot/config/pointcloud_to_laserscan.yaml` |
+| 输出 | `/scan`（仿真 `laser_link`，实车 `base_link`） |
+| 参数 | 仿真 `pointcloud_to_laserscan.yaml`；实车 `pointcloud_to_laserscan_hardware.yaml` |
 | 启动 | `gazebo_sim.launch.py` 会自动带上；也可单独 `ros2 launch my_nav2_robot pointcloud_to_laserscan.launch.py` |
 
-`laser_link` 只是虚拟 2D 扫描坐标系，不是物理传感器。切片高度、量程需要按 Mid360 安装高度在实车上重标。
+仿真里 `laser_link` 只是虚拟 2D 扫描坐标系。实车模型是 `urdf/robot_hardware.urdf.xacro`：`base_link` 在轮轴中心，`base_footprint` 在其正下方地面，CAD `+x` 指向车尾，所以 Mid360 相对 `base_link` 绕 z 再转 `pi`。`hardware_bringup.launch.py` / `full_navigation_real.launch.py` 默认加载该模型，不启动 Gazebo。
 
 ## 快速开始
 使用`my_nav2_robot`下的`launch`下的`full_navigation.launch.py`launch文件进行项目启动，启动前应使用

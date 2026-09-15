@@ -5,34 +5,34 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration, PythonExpression
+from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     pkg_share = get_package_share_directory('my_nav2_robot')
-    mecanum_xacro = os.path.join(pkg_share, 'urdf', 'robot.urdf.xacro')
-    diff_xacro = os.path.join(pkg_share, 'urdf', 'robot_diff.urdf.xacro')
+    default_model = os.path.join(
+        pkg_share, 'urdf', 'robot_hardware.urdf.xacro')
     default_livox_config = os.path.join(pkg_share, 'config', 'MID360_config.json')
+    hardware_scan_config = os.path.join(
+        pkg_share, 'config', 'pointcloud_to_laserscan_hardware.yaml')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    chassis = LaunchConfiguration('chassis')
+    model = LaunchConfiguration('model')
     start_livox = LaunchConfiguration('start_livox')
     start_scan = LaunchConfiguration('start_scan')
     user_config_path = LaunchConfiguration('user_config_path')
 
-    xacro_file = PythonExpression([
-        "'", diff_xacro, "' if '", chassis, "' == 'diff' else '", mecanum_xacro, "'"
-    ])
-    robot_description = Command(['xacro ', xacro_file])
+    robot_description = Command(['xacro ', model])
 
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
         parameters=[{
-            'robot_description': ParameterValue(robot_description, value_type=str),
+            'robot_description': ParameterValue(
+                robot_description, value_type=str),
             'use_sim_time': use_sim_time,
         }],
     )
@@ -61,7 +61,10 @@ def generate_launch_description():
             os.path.join(pkg_share, 'launch', 'pointcloud_to_laserscan.launch.py')
         ),
         condition=IfCondition(start_scan),
-        launch_arguments={'use_sim_time': use_sim_time}.items(),
+        launch_arguments={
+            'config_file': hardware_scan_config,
+            'use_sim_time': use_sim_time,
+        }.items(),
     )
 
     return LaunchDescription([
@@ -70,9 +73,9 @@ def generate_launch_description():
             default_value='false',
             description='Must stay false on the real robot'),
         DeclareLaunchArgument(
-            'chassis',
-            default_value='diff',
-            description='Chassis kinematics: mecanum or diff'),
+            'model',
+            default_value=default_model,
+            description='Real-robot Xacro model (CAD hardware URDF)'),
         DeclareLaunchArgument(
             'start_livox',
             default_value='true',

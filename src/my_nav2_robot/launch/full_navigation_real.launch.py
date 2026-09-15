@@ -1,8 +1,10 @@
 import os
+import tempfile
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -10,19 +12,56 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from nav2_common.launch import RewrittenYaml
 
+# CAD wheel envelope plus ~1 cm: 0.88 x 0.62 m. Circumscribed radius ~0.54 m.
+HARDWARE_FOOTPRINT = (
+    "[ [0.44, 0.31], [0.44, -0.31], [-0.44, -0.31], [-0.44, 0.31] ]"
+)
+HARDWARE_NAV2_PARAMS = os.path.join(
+    tempfile.gettempdir(), 'my_nav2_robot_nav2_params_hardware.yaml')
+
+
+def _apply_hardware_footprint(params):
+    local = (
+        params.get('local_costmap', {})
+        .get('local_costmap', {})
+        .get('ros__parameters', {})
+    )
+    if local:
+        local['footprint'] = HARDWARE_FOOTPRINT
+
+    global_params = (
+        params.get('global_costmap', {})
+        .get('global_costmap', {})
+        .get('ros__parameters', {})
+    )
+    if global_params:
+        global_params.pop('robot_radius', None)
+        global_params['footprint'] = HARDWARE_FOOTPRINT
+
+    critic = (
+        params.get('controller_server', {})
+        .get('ros__parameters', {})
+        .get('MPPI', {})
+        .get('CostCritic')
+    )
+    if isinstance(critic, dict) and 'consider_footprint' in critic:
+        critic['consider_footprint'] = True
+    return params
+
 
 def generate_launch_description():
     """Nav2 + SLAM bringup for the real robot (no Gazebo).
 
     Sensor data sources are started here (hardware_bringup.launch.py):
       - livox_ros_driver2 on the real Mid360 -> /livox/lidar + /livox/imu
-      - pointcloud_to_laserscan              -> /scan
+      - pointcloud_to_laserscan              -> /scan (base_link slice)
+      - CAD hardware URDF (robot_hardware.urdf.xacro)
 
     Odometry comes from BIEVR-LIO. The Ceres in bievr_ws conflicts with the
     Nav2 environment, so BIEVR runs in a separate terminal:
 
         source /home/nav/bievr_ws/quick_source.sh
-        ros2 launch bievr_lio_ros2 process_topics.launch.py \
+        ros2 launch bievr_lio_ros2 process_topics.launch.py \\
             sensor_config:=nav2_real params:=params rviz:=false
 
     BIEVR publishes /bievr_lio/odom and the TF odom -> base_footprint that
@@ -52,6 +91,7 @@ def generate_launch_description():
     start_scan = LaunchConfiguration('start_scan')
     map_override = LaunchConfiguration('map')
     scene = LaunchConfiguration('scene')
+    hardware_model = LaunchConfiguration('model')
 
     slam_for_bringup = PythonExpression([
         "'True' if '", slam_mode, "' in ('true', 'True') else 'False'"
@@ -61,10 +101,8 @@ def generate_launch_description():
         pkg_project, 'config', 'nav2_params_slam_diff.yaml')
     nav2_params_slam_mecanum = os.path.join(
         pkg_project, 'config', 'nav2_params_slam.yaml')
-    nav2_params = PythonExpression([
-        "'", nav2_params_slam_diff, "' if '", chassis,
-        "' == 'diff' else '", nav2_params_slam_mecanum, "'"
-    ])
+    default_model = os.path.join(
+        pkg_project, 'urdf', 'robot_hardware.urdf.xacro')
     bt_xml_diff = os.path.join(pkg_project, 'behavior_trees', 'test_nav_diff.xml')
     bt_xml_mecanum = os.path.join(pkg_project, 'behavior_trees', 'test_nav.xml')
     default_nav_to_pose_bt_xml = PythonExpression([
@@ -74,9 +112,28 @@ def generate_launch_description():
     rviz_config = os.path.join(pkg_project, 'config', 'nav2_config.rviz')
     tunnel_config = os.path.join(pkg_tunnel, 'config', 'tunnel_guidance.yaml')
 
+    def write_hardware_nav2_params(source):
+        with open(source, 'r', encoding='utf-8') as stream:
+            params = yaml.safe_load(stream)
+        _apply_hardware_footprint(params)
+        with open(HARDWARE_NAV2_PARAMS, 'w', encoding='utf-8') as stream:
+            yaml.safe_dump(params, stream, sort_keys=False)
+
+    # Seed the temp file so RewrittenYaml can resolve it even before
+    # OpaqueFunction runs; chassis:=mecanum overwrites it at launch.
+    write_hardware_nav2_params(nav2_params_slam_diff)
+
+    def patch_hardware_nav2_params(context, *args, **kwargs):
+        chassis_value = context.perform_substitution(chassis)
+        source = (
+            nav2_params_slam_diff
+            if chassis_value == 'diff' else nav2_params_slam_mecanum)
+        write_hardware_nav2_params(source)
+        return []
+
     # Always BIEVR-LIO on the real robot. No ground-truth or wheel-odom TF.
     params_rewritten = RewrittenYaml(
-        source_file=nav2_params,
+        source_file=HARDWARE_NAV2_PARAMS,
         param_rewrites={
             'use_sim_time': use_sim_time,
             'default_nav_to_pose_bt_xml': default_nav_to_pose_bt_xml,
@@ -96,20 +153,18 @@ def generate_launch_description():
         map_yaml_file, "'"
     ])
 
-    # Mid360 lidar + IMU source, /scan projection, robot TF.
     hardware = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_project, 'launch', 'hardware_bringup.launch.py')
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'chassis': chassis,
+            'model': hardware_model,
             'start_livox': start_livox,
             'start_scan': start_scan,
         }.items(),
     )
 
-    # slam:=False only: identity map->odom. slam_toolbox publishes it in SLAM.
     static_map_to_odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -121,7 +176,6 @@ def generate_launch_description():
         condition=UnlessCondition(slam_mode),
     )
 
-    # slam_toolbox only publishes /map while at least one subscriber exists.
     map_keepalive = Node(
         package='my_nav2_robot',
         executable='map_keepalive.py',
@@ -178,6 +232,10 @@ def generate_launch_description():
                     allow_capture_done, value_type=bool),
                 'wait_for_vision': ParameterValue(
                     wait_for_vision, value_type=bool),
+                # CAD base_link is at wheel-center height (ground z=-0.1315).
+                'ground_max_z': -0.08,
+                'search_obstacle_min_height': -0.08,
+                'search_robot_clearance': 0.54,
             },
         ],
     )
@@ -194,7 +252,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'chassis',
             default_value='diff',
-            description='Chassis kinematics: diff (default) or mecanum.'),
+            description='Nav2 controller/BT set: diff (default) or mecanum.'),
+        DeclareLaunchArgument(
+            'model',
+            default_value=default_model,
+            description='Real-robot Xacro. Defaults to the CAD hardware model.'),
         DeclareLaunchArgument(
             'start_livox',
             default_value='true',
@@ -240,6 +302,7 @@ def generate_launch_description():
                 'When tunnel:=true, after MCU capture_done publish 0x01 on '
                 '/vision_capture_cmd and wait for 0x02 on /vision_capture_status. '
                 'Keep true on the real robot.')),
+        OpaqueFunction(function=patch_hardware_nav2_params),
         hardware,
         static_map_to_odom,
         map_keepalive,
